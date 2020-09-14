@@ -2,7 +2,6 @@
  * dmo.c : DirectMedia Object decoder module for vlc
  *****************************************************************************
  * Copyright (C) 2002, 2003 VLC authors and VideoLAN
- * $Id$
  *
  * Author: Gildas Bazin <gbazin@videolan.org>
  *
@@ -38,7 +37,6 @@
 
 #ifdef _WIN32
 #   include <objbase.h>
-#   include <vlc_charset.h>
 #endif
 
 #include <vlc_codecs.h>
@@ -47,12 +45,6 @@
 
 #ifndef NDEBUG
 # define DMO_DEBUG 1
-#endif
-
-#ifdef UNICODE
-# define PRIs "%ls"
-#else
-# define PRIs "%s"
 #endif
 
 typedef long (STDCALL *GETCLASS) ( const GUID*, const GUID*, void** );
@@ -87,7 +79,6 @@ vlc_module_begin ()
     set_capability( "audio decoder", 1 )
     set_callbacks(DecoderOpen, DecoderClose)
 
-#   define ENC_CFG_PREFIX "sout-dmo-"
     add_submodule ()
     set_description( N_("DirectMedia Object encoder") )
     add_shortcut( "dmo" )
@@ -146,7 +137,6 @@ static const GUID guid_wmva ={ 0x03be3ac4, 0x84b7, 0x4e0e, { 0xa7, 0x8d, 0xd3, 0
 static const GUID guid_wma = { 0x874131cb, 0x4ecc, 0x443b, { 0x89, 0x48, 0x74, 0x6b, 0x89, 0x59, 0x5d, 0x20 } };
 static const GUID guid_wma9 = { 0x27ca0808, 0x01f5, 0x4e7a, { 0x8b, 0x05, 0x87, 0xf8, 0x07, 0xa2, 0x33, 0xd1 } };
 
-static const GUID guid_wmv_enc = { 0x3181343b, 0x94a2, 0x4feb, { 0xad, 0xef, 0x30, 0xa1, 0xdd, 0xe6, 0x17, 0xb4 } };
 static const GUID guid_wmv_enc2 = { 0x96b57cdd, 0x8966, 0x410c,{ 0xbb, 0x1f, 0xc9, 0x7e, 0xea, 0x76, 0x5c, 0x04 } };
 static const GUID guid_wma_enc = { 0x70f598e9, 0xf4ab, 0x495a, { 0x99, 0xe2, 0xa7, 0xc4, 0xd3, 0xd8, 0x9a, 0xbf } };
 static const GUID guid_wmv8_enc = { 0x7e320092, 0x596a, 0x41b2,{ 0xbb, 0xeb, 0x17, 0x5d, 0x10, 0x50, 0x4e, 0xb6 } };
@@ -159,7 +149,7 @@ static const GUID guid_wmv9_enc = { 0xd23b90d0, 0x144f, 0x46bd,{ 0x84, 0x1d, 0x5
 typedef struct
 {
     vlc_fourcc_t i_fourcc;
-    const TCHAR  *psz_dll;
+    const WCHAR  *psz_dll;
     const GUID   *p_guid;
 
 } codec_dll;
@@ -246,9 +236,8 @@ static int DecoderOpen( vlc_object_t *p_this )
     {
         if( decoders_table[i].i_fourcc == p_dec->fmt_in.i_codec )
         {
-            msg_Dbg( p_dec, "DMO codec for %4.4s may work with dll="PRIs,
-                     (char*)&p_dec->fmt_in.i_codec,
-                     decoders_table[i].psz_dll );
+            msg_Dbg( p_dec, "DMO codec for %4.4s may work with dll=%ls",
+                     (char*)&p_dec->fmt_in.i_codec, decoders_table[i].psz_dll);
             goto found;
         }
     }
@@ -283,9 +272,6 @@ found:
 
     vlc_join( p_sys->thread, NULL );
 error:
-    vlc_cond_destroy( &p_sys->wait_input );
-    vlc_cond_destroy( &p_sys->wait_output );
-    vlc_mutex_destroy( &p_sys->lock );
     free( p_sys );
     return VLC_ENOMEM;
 }
@@ -304,9 +290,6 @@ static void DecoderClose( vlc_object_t *p_this )
     vlc_mutex_unlock( &p_sys->lock );
 
     vlc_join( p_sys->thread, NULL );
-    vlc_cond_destroy( &p_sys->wait_input );
-    vlc_cond_destroy( &p_sys->wait_output );
-    vlc_mutex_destroy( &p_sys->lock );
     free( p_sys );
 }
 
@@ -750,8 +733,7 @@ loader:
     *p_hmsdmo_dll = LoadLibrary( codecs_table[i_codec].psz_dll );
     if( *p_hmsdmo_dll == NULL )
     {
-        msg_Dbg( p_this, "failed loading '"PRIs"'",
-                 codecs_table[i_codec].psz_dll );
+        msg_Dbg( p_this, "failed loading '%ls'", codecs_table[i_codec].psz_dll );
         return VLC_EGENERIC;
     }
 
@@ -856,6 +838,7 @@ static int DecBlock( decoder_t *p_dec, block_t **pp_block )
                        (IMediaBuffer *)p_in, DMO_INPUT_DATA_BUFFERF_SYNCPOINT,
                        0, 0 );
 
+        *pp_block = NULL;
         p_in->vt->Release( (IUnknown *)p_in );
 
         if( i_result == S_FALSE )
@@ -881,8 +864,6 @@ static int DecBlock( decoder_t *p_dec, block_t **pp_block )
 #ifdef DMO_DEBUG
             msg_Dbg( p_dec, "ProcessInput(): successful" );
 #endif
-            block_Release( p_block );
-            *pp_block = NULL;
         }
     }
 

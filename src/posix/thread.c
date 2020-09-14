@@ -33,6 +33,7 @@
 #include "libvlc.h"
 #include <stdarg.h>
 #include <stdatomic.h>
+#include <stdnoreturn.h>
 #include <signal.h>
 #include <errno.h>
 #include <time.h>
@@ -70,7 +71,7 @@ void vlc_trace (const char *fn, const char *file, unsigned line)
      fflush (stderr); /* needed before switch to low-level I/O */
 #ifdef HAVE_BACKTRACE
      void *stack[20];
-     int len = backtrace (stack, sizeof (stack) / sizeof (stack[0]));
+     int len = backtrace (stack, ARRAY_SIZE (stack) );
      backtrace_symbols_fd (stack, len, 2);
 #endif
      fsync (2);
@@ -102,184 +103,6 @@ vlc_thread_fatal (const char *action, int error,
 # define VLC_THREAD_ASSERT( action ) ((void)val)
 #endif
 
-void vlc_mutex_init( vlc_mutex_t *p_mutex )
-{
-    pthread_mutexattr_t attr;
-
-    if (unlikely(pthread_mutexattr_init (&attr)))
-        abort();
-#ifdef NDEBUG
-    pthread_mutexattr_settype (&attr, PTHREAD_MUTEX_DEFAULT);
-#else
-    pthread_mutexattr_settype (&attr, PTHREAD_MUTEX_ERRORCHECK);
-#endif
-    if (unlikely(pthread_mutex_init (p_mutex, &attr)))
-        abort();
-    pthread_mutexattr_destroy( &attr );
-}
-
-void vlc_mutex_init_recursive( vlc_mutex_t *p_mutex )
-{
-    pthread_mutexattr_t attr;
-
-    if (unlikely(pthread_mutexattr_init (&attr)))
-        abort();
-    pthread_mutexattr_settype (&attr, PTHREAD_MUTEX_RECURSIVE);
-    if (unlikely(pthread_mutex_init (p_mutex, &attr)))
-        abort();
-    pthread_mutexattr_destroy( &attr );
-}
-
-void vlc_mutex_destroy (vlc_mutex_t *p_mutex)
-{
-    int val = pthread_mutex_destroy( p_mutex );
-    VLC_THREAD_ASSERT ("destroying mutex");
-}
-
-#ifndef NDEBUG
-# ifdef HAVE_VALGRIND_VALGRIND_H
-#  include <valgrind/valgrind.h>
-# else
-#  define RUNNING_ON_VALGRIND (0)
-# endif
-
-/**
- * Asserts that a mutex is locked by the calling thread.
- */
-void vlc_assert_locked (vlc_mutex_t *p_mutex)
-{
-    if (RUNNING_ON_VALGRIND > 0)
-        return;
-    assert (pthread_mutex_lock (p_mutex) == EDEADLK);
-}
-#endif
-
-void vlc_mutex_lock (vlc_mutex_t *p_mutex)
-{
-    int val = pthread_mutex_lock( p_mutex );
-    VLC_THREAD_ASSERT ("locking mutex");
-}
-
-int vlc_mutex_trylock (vlc_mutex_t *p_mutex)
-{
-    int val = pthread_mutex_trylock( p_mutex );
-
-    if (val != EBUSY)
-        VLC_THREAD_ASSERT ("locking mutex");
-    return val;
-}
-
-void vlc_mutex_unlock (vlc_mutex_t *p_mutex)
-{
-    int val = pthread_mutex_unlock( p_mutex );
-    VLC_THREAD_ASSERT ("unlocking mutex");
-}
-
-void vlc_cond_init (vlc_cond_t *p_condvar)
-{
-    pthread_condattr_t attr;
-
-    if (unlikely(pthread_condattr_init (&attr))
-     || unlikely(pthread_condattr_setclock(&attr, CLOCK_MONOTONIC))
-     || unlikely(pthread_cond_init (p_condvar, &attr)))
-        abort ();
-
-    pthread_condattr_destroy (&attr);
-}
-
-void vlc_cond_init_daytime (vlc_cond_t *p_condvar)
-{
-    if (unlikely(pthread_cond_init (p_condvar, NULL)))
-        abort ();
-}
-
-void vlc_cond_destroy (vlc_cond_t *p_condvar)
-{
-    int val = pthread_cond_destroy( p_condvar );
-    VLC_THREAD_ASSERT ("destroying condition");
-}
-
-void vlc_cond_signal (vlc_cond_t *p_condvar)
-{
-    int val = pthread_cond_signal( p_condvar );
-    VLC_THREAD_ASSERT ("signaling condition variable");
-}
-
-void vlc_cond_broadcast (vlc_cond_t *p_condvar)
-{
-    pthread_cond_broadcast (p_condvar);
-}
-
-void vlc_cond_wait (vlc_cond_t *p_condvar, vlc_mutex_t *p_mutex)
-{
-    int val = pthread_cond_wait( p_condvar, p_mutex );
-    VLC_THREAD_ASSERT ("waiting on condition");
-}
-
-int vlc_cond_timedwait (vlc_cond_t *p_condvar, vlc_mutex_t *p_mutex,
-                        vlc_tick_t deadline)
-{
-    struct timespec ts = timespec_from_vlc_tick (deadline);
-    int val = pthread_cond_timedwait (p_condvar, p_mutex, &ts);
-    if (val != ETIMEDOUT)
-        VLC_THREAD_ASSERT ("timed-waiting on condition");
-    return val;
-}
-
-int vlc_cond_timedwait_daytime (vlc_cond_t *p_condvar, vlc_mutex_t *p_mutex,
-                                time_t deadline)
-{
-    struct timespec ts = { deadline, 0 };
-    int val = pthread_cond_timedwait (p_condvar, p_mutex, &ts);
-    if (val != ETIMEDOUT)
-        VLC_THREAD_ASSERT ("timed-waiting on condition");
-    return val;
-}
-
-void vlc_sem_init (vlc_sem_t *sem, unsigned value)
-{
-    if (unlikely(sem_init (sem, 0, value)))
-        abort ();
-}
-
-void vlc_sem_destroy (vlc_sem_t *sem)
-{
-    int val;
-
-    if (likely(sem_destroy (sem) == 0))
-        return;
-
-    val = errno;
-
-    VLC_THREAD_ASSERT ("destroying semaphore");
-}
-
-int vlc_sem_post (vlc_sem_t *sem)
-{
-    int val;
-
-    if (likely(sem_post (sem) == 0))
-        return 0;
-
-    val = errno;
-
-    if (unlikely(val != EOVERFLOW))
-        VLC_THREAD_ASSERT ("unlocking semaphore");
-    return val;
-}
-
-void vlc_sem_wait (vlc_sem_t *sem)
-{
-    int val;
-
-    do
-        if (likely(sem_wait (sem) == 0))
-            return;
-    while ((val = errno) == EINTR);
-
-    VLC_THREAD_ASSERT ("locking semaphore");
-}
-
 void vlc_rwlock_init (vlc_rwlock_t *lock)
 {
     if (unlikely(pthread_rwlock_init (lock, NULL)))
@@ -310,12 +133,6 @@ void vlc_rwlock_unlock (vlc_rwlock_t *lock)
     VLC_THREAD_ASSERT ("releasing R/W lock");
 }
 
-void vlc_once(vlc_once_t *once, void (*cb)(void))
-{
-    int val = pthread_once(once, cb);
-    VLC_THREAD_ASSERT("initializing once");
-}
-
 int vlc_threadvar_create (vlc_threadvar_t *key, void (*destr) (void *))
 {
     return pthread_key_create (key, destr);
@@ -336,29 +153,10 @@ void *vlc_threadvar_get (vlc_threadvar_t key)
     return pthread_getspecific (key);
 }
 
-static bool rt_priorities = false;
-static int rt_offset;
-
 void vlc_threads_setup (libvlc_int_t *p_libvlc)
 {
-    static vlc_mutex_t lock = VLC_STATIC_MUTEX;
-    static bool initialized = false;
-
-    vlc_mutex_lock (&lock);
-    /* Initializes real-time priorities before any thread is created,
-     * just once per process. */
-    if (!initialized)
-    {
-        if (var_InheritBool (p_libvlc, "rt-priority"))
-        {
-            rt_offset = var_InheritInteger (p_libvlc, "rt-offset");
-            rt_priorities = true;
-        }
-        initialized = true;
-    }
-    vlc_mutex_unlock (&lock);
+    (void) p_libvlc;
 }
-
 
 static int vlc_clone_attr (vlc_thread_t *th, pthread_attr_t *attr,
                            void *(*entry) (void *), void *data, int priority)
@@ -388,27 +186,6 @@ static int vlc_clone_attr (vlc_thread_t *th, pthread_attr_t *attr,
         pthread_sigmask (SIG_BLOCK, &set, &oldset);
     }
 
-#if defined (_POSIX_PRIORITY_SCHEDULING) && (_POSIX_PRIORITY_SCHEDULING >= 0) \
- && defined (_POSIX_THREAD_PRIORITY_SCHEDULING) \
- && (_POSIX_THREAD_PRIORITY_SCHEDULING >= 0)
-    if (rt_priorities)
-    {
-        struct sched_param sp = { .sched_priority = priority + rt_offset, };
-        int policy;
-
-        if (sp.sched_priority <= 0)
-            sp.sched_priority += sched_get_priority_max (policy = SCHED_OTHER);
-        else
-            sp.sched_priority += sched_get_priority_min (policy = SCHED_RR);
-
-        pthread_attr_setschedpolicy (attr, policy);
-        pthread_attr_setschedparam (attr, &sp);
-        pthread_attr_setinheritsched (attr, PTHREAD_EXPLICIT_SCHED);
-    }
-#else
-    (void) priority;
-#endif
-
     /* The thread stack size.
      * The lower the value, the less address space per thread, the highest
      * maximum simultaneous threads per process. Too low values will cause
@@ -431,6 +208,7 @@ static int vlc_clone_attr (vlc_thread_t *th, pthread_attr_t *attr,
     ret = pthread_create(&th->handle, attr, entry, data);
     pthread_sigmask (SIG_SETMASK, &oldset, NULL);
     pthread_attr_destroy (attr);
+    (void) priority;
     return ret;
 }
 
@@ -451,27 +229,18 @@ void vlc_join(vlc_thread_t th, void **result)
 
 /**
  * Creates and starts new detached thread.
+ *
  * A detached thread cannot be joined. Its resources will be automatically
  * released whenever the thread exits (in particular, its call stack will be
  * reclaimed).
  *
- * Detached thread are particularly useful when some work needs to be done
- * asynchronously, that is likely to be completed much earlier than the thread
- * can practically be joined. In this case, thread detach can spare memory.
+ * \warning
+ * Detached thread are intrinsically unsafe to use, as there are no ways to
+ * know whence the thread has terminated cleanly and its resources can be
+ * reclaimed (in particular, the executable code run by the thread).
  *
- * A detached thread may be cancelled, so as to expedite its termination.
- * Be extremely careful if you do this: while a normal joinable thread can
- * safely be cancelled after it has already exited, cancelling an already
- * exited detached thread is undefined: The thread handle would is destroyed
- * immediately when the detached thread exits. So you need to ensure that the
- * detached thread is still running before cancellation is attempted.
- *
- * @warning Care must be taken that any resources used by the detached thread
- * remains valid until the thread completes.
- *
- * @note A detached thread must eventually exit just like another other
- * thread. In practice, LibVLC will wait for detached threads to exit before
- * it unloads the plugins.
+ * \bug
+ * This function should be removed. Do not use this function in new code.
  *
  * @param th [OUT] pointer to hold the thread handle, or NULL
  * @param entry entry point for the thread
@@ -493,12 +262,6 @@ int vlc_clone_detach (vlc_thread_t *th, void *(*entry) (void *), void *data,
     return vlc_clone_attr (th, &attr, entry, data, priority);
 }
 
-vlc_thread_t vlc_thread_self (void)
-{
-    vlc_thread_t thread = { pthread_self() };
-    return thread;
-}
-
 VLC_WEAK unsigned long vlc_thread_id(void)
 {
      return -1;
@@ -506,25 +269,7 @@ VLC_WEAK unsigned long vlc_thread_id(void)
 
 int vlc_set_priority (vlc_thread_t th, int priority)
 {
-#if defined (_POSIX_PRIORITY_SCHEDULING) && (_POSIX_PRIORITY_SCHEDULING >= 0) \
- && defined (_POSIX_THREAD_PRIORITY_SCHEDULING) \
- && (_POSIX_THREAD_PRIORITY_SCHEDULING >= 0)
-    if (rt_priorities)
-    {
-        struct sched_param sp = { .sched_priority = priority + rt_offset, };
-        int policy;
-
-        if (sp.sched_priority <= 0)
-            sp.sched_priority += sched_get_priority_max (policy = SCHED_OTHER);
-        else
-            sp.sched_priority += sched_get_priority_min (policy = SCHED_RR);
-
-        if (pthread_setschedparam(th.handle, policy, &sp))
-            return VLC_EGENERIC;
-    }
-#else
     (void) th; (void) priority;
-#endif
     return VLC_SUCCESS;
 }
 
@@ -562,12 +307,6 @@ void vlc_restorecancel (int state)
 void vlc_testcancel (void)
 {
     pthread_testcancel ();
-}
-
-void vlc_control_cancel (int cmd, ...)
-{
-    (void) cmd;
-    vlc_assert_unreachable ();
 }
 
 vlc_tick_t vlc_tick_now (void)

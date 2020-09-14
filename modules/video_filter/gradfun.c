@@ -2,7 +2,6 @@
  * gradfun.c: wrapper for the gradfun filter from libav
  *****************************************************************************
  * Copyright (C) 2010 Laurent Aimar
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir _AT_ videolan _DOT_ org>
  *
@@ -170,7 +169,6 @@ static void Close(vlc_object_t *object)
     var_DelCallback(filter, CFG_PREFIX "radius",   Callback, NULL);
     var_DelCallback(filter, CFG_PREFIX "strength", Callback, NULL);
     aligned_free(sys->cfg.buf);
-    vlc_mutex_destroy(&sys->lock);
     free(sys);
 }
 

@@ -2,7 +2,6 @@
  * bluescreen.c : Bluescreen (weather channel like) video filter for vlc
  *****************************************************************************
  * Copyright (C) 2005-2007 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Antoine Cellerier <dionoea at videolan tod org>
  *
@@ -160,7 +159,6 @@ static void Destroy( vlc_object_t *p_this )
     var_DelCallback( p_filter, CFG_PREFIX "vt", BluescreenCallback, p_sys );
 
     free( p_sys->p_at );
-    vlc_mutex_destroy( &p_sys->lock );
     free( p_sys );
 }
 

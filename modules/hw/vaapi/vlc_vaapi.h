@@ -36,41 +36,9 @@
 #endif
 
 #include <vlc_common.h>
+#include <vlc_codec.h>
 #include <vlc_fourcc.h>
 #include <vlc_picture_pool.h>
-
-/**************************
- * VA instance management *
- **************************/
-
-typedef void (*vlc_vaapi_native_destroy_cb)(VANativeDisplay);
-struct vlc_vaapi_instance;
-
-/* Initializes the VADisplay and sets the reference counter to 1. If not NULL,
- * native_destroy_cb will be called when the instance is released in order to
- * destroy the native holder (that can be a drm/x11/wl). On error, dpy is
- * terminated and the destroy callback is called. */
-struct vlc_vaapi_instance *
-vlc_vaapi_InitializeInstance(vlc_object_t *o, VADisplay dpy,
-                             VANativeDisplay native,
-                             vlc_vaapi_native_destroy_cb native_destroy_cb);
-
-/* Get and Initializes a VADisplay from a DRM device. If device is NULL, this
- * function will try to open default devices. */
-struct vlc_vaapi_instance *
-vlc_vaapi_InitializeInstanceDRM(vlc_object_t *o,
-                                VADisplay (*pf_getDisplayDRM)(int),
-                                VADisplay *pdpy, const char *device);
-
-
-/* Increments the VAAPI instance refcount */
-VADisplay
-vlc_vaapi_HoldInstance(struct vlc_vaapi_instance *inst);
-
-/* Decrements the VAAPI instance refcount, and call vaTerminate if that counter
- * reaches 0 */
-void
-vlc_vaapi_ReleaseInstance(struct vlc_vaapi_instance *inst);
 
 /**************************
  * VAAPI create & destroy *
@@ -185,6 +153,13 @@ vlc_vaapi_EndPicture(vlc_object_t *o, VADisplay dpy, VAContextID ctx);
  * VAAPI helpers *
  *****************/
 
+struct vaapi_pic_context
+{
+    picture_context_t s;
+    VASurfaceID surface;
+    VADisplay va_dpy;
+};
+
 /* Creates a VAConfigID */
 VAConfigID
 vlc_vaapi_CreateConfigChecked(vlc_object_t *o, VADisplay dpy,
@@ -194,23 +169,18 @@ vlc_vaapi_CreateConfigChecked(vlc_object_t *o, VADisplay dpy,
 /* Create a pool backed by VASurfaceID. render_targets will destroyed once
  * the pool and every pictures are released. */
 picture_pool_t *
-vlc_vaapi_PoolNew(vlc_object_t *o, struct vlc_vaapi_instance *vainst,
+vlc_vaapi_PoolNew(vlc_object_t *o, vlc_video_context *vctx,
                   VADisplay dpy, unsigned count, VASurfaceID **render_targets,
-                  const video_format_t *restrict fmt, bool b_force_fourcc);
-
-/* Get render targets from a pic_sys allocated by the vaapi pool (see
- * vlc_vaapi_PoolNew()) */
-unsigned
-vlc_vaapi_PicSysGetRenderTargets(void *sys, VASurfaceID **render_targets);
-
-/* Get and hold the VADisplay instance attached to the picture sys */
-struct vlc_vaapi_instance *
-vlc_vaapi_PicSysHoldInstance(void *sys, VADisplay *dpy);
+                  const video_format_t *restrict fmt);
 
 /* Attachs the VASurface to the picture context, the picture must be allocated
  * by a vaapi pool (see vlc_vaapi_PoolNew()) */
 void
 vlc_vaapi_PicAttachContext(picture_t *pic);
+
+/* Attachs the VASurface to the picture context */
+void
+vlc_vaapi_PicSetContext(picture_t *pic, struct vaapi_pic_context *);
 
 /* Get the VASurfaceID attached to the pic */
 VASurfaceID
@@ -226,5 +196,31 @@ vlc_vaapi_IsChromaOpaque(int i_vlc_chroma)
     return i_vlc_chroma == VLC_CODEC_VAAPI_420
         || i_vlc_chroma == VLC_CODEC_VAAPI_420_10BPP;
 }
+
+void vlc_chroma_to_vaapi(int i_vlc_chroma, unsigned *va_rt_format, int *va_fourcc);
+
+#if VA_CHECK_VERSION(1, 1, 0)
+int
+vlc_vaapi_ExportSurfaceHandle(vlc_object_t *o,
+                              VADisplay dpy,
+                              VASurfaceID surface,
+                              uint32_t mem_type,
+                              uint32_t flags,
+                              void *descriptor);
+#endif
+
+/* This macro is designed to wrap any VA call, and in case of failure,
+   display the VA error string then goto the 'error' label (which you must
+   define). */
+#define VA_CALL(o, f, args...)                          \
+    do                                                  \
+    {                                                   \
+        VAStatus s = f(args);                           \
+        if (s != VA_STATUS_SUCCESS)                     \
+        {                                               \
+            msg_Err(o, "%s: %s", #f, vaErrorStr(s));    \
+            goto error;                                 \
+        }                                               \
+    } while (0)
 
 #endif /* VLC_VAAPI_H */

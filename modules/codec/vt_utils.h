@@ -34,11 +34,8 @@ void cfdict_set_int32(CFMutableDictionaryRef dict, CFStringRef key, int value);
  * The cvpx ref will be released when the picture is released
  * @return VLC_SUCCESS or VLC_ENOMEM
  */
-int cvpxpic_attach(picture_t *p_pic, CVPixelBufferRef cvpx);
-
-int cvpxpic_attach_with_cb(picture_t *p_pic, CVPixelBufferRef cvpx,
-                           void (*on_released_cb)(CVPixelBufferRef, void *, unsigned nb_fields),
-                           void *on_released_data);
+int cvpxpic_attach(picture_t *p_pic, CVPixelBufferRef cvpx, vlc_video_context *vctx,
+                   void (*on_released_cb)(vlc_video_context *vctx, unsigned));
 
 /*
  * Get the cvpx buffer attached to a picture
@@ -55,7 +52,8 @@ CVPixelBufferRef cvpxpic_get_ref(picture_t *pic);
  * the picture and unmap the cvpx buffer.
  */
 picture_t *cvpxpic_create_mapped(const video_format_t *fmt,
-                                 CVPixelBufferRef cvpx, bool readonly);
+                                 CVPixelBufferRef cvpx, vlc_video_context *vctx,
+                                 bool readonly);
 
 /*
  * Create a picture attached to an unmapped cvpx buffer
@@ -78,5 +76,29 @@ CVPixelBufferPoolRef cvpxpool_create(const video_format_t *fmt, unsigned count);
  * Get a cvpx buffer from a pool
  */
 CVPixelBufferRef cvpxpool_new_cvpx(CVPixelBufferPoolRef pool);
+
+enum cvpx_video_context_type
+{
+    CVPX_VIDEO_CONTEXT_DEFAULT,
+    CVPX_VIDEO_CONTEXT_VIDEOTOOLBOX,
+    CVPX_VIDEO_CONTEXT_CIFILTERS,
+};
+
+/*
+ * Create a CVPX video context for a subtype
+ * The private data of a subtype (VIDEOTOOLBOX, CIFILTERS) if only compatible
+ * for this subtype
+ */
+vlc_video_context *
+vlc_video_context_CreateCVPX(vlc_decoder_device *device,
+                             enum cvpx_video_context_type type, size_t type_size,
+                             const struct vlc_video_context_operations *ops);
+
+/*
+ * Get the video context sub private data
+ */
+void *
+vlc_video_context_GetCVPXPrivate(vlc_video_context *vctx,
+                                 enum cvpx_video_context_type type);
 
 #endif

@@ -40,6 +40,7 @@ using namespace adaptive::http;
 AbstractChunkSource::AbstractChunkSource()
 {
     contentLength = 0;
+    requeststatus = RequestStatus::Success;
 }
 
 AbstractChunkSource::~AbstractChunkSource()
@@ -64,6 +65,11 @@ std::string AbstractChunkSource::getContentType() const
     return std::string();
 }
 
+enum RequestStatus AbstractChunkSource::getRequestStatus() const
+{
+    return requeststatus;
+}
+
 AbstractChunk::AbstractChunk(AbstractChunkSource *source_)
 {
     bytesRead = 0;
@@ -78,6 +84,11 @@ AbstractChunk::~AbstractChunk()
 std::string AbstractChunk::getContentType()
 {
     return source->getContentType();
+}
+
+enum RequestStatus AbstractChunk::getRequestStatus() const
+{
+    return source->getRequestStatus();
 }
 
 size_t AbstractChunk::getBytesRead() const
@@ -127,15 +138,17 @@ block_t * AbstractChunk::read(size_t size)
 }
 
 HTTPChunkSource::HTTPChunkSource(const std::string& url, AbstractConnectionManager *manager,
-                                 const adaptive::ID &id) :
+                                 const adaptive::ID &id, bool access) :
     AbstractChunkSource(),
     connection   (NULL),
     connManager  (manager),
     consumed     (0)
 {
+    vlc_mutex_init(&lock);
     prepared = false;
     eof = false;
     sourceid = id;
+    setUseAccess(access);
     if(!init(url))
         eof = true;
 }
@@ -148,7 +161,9 @@ HTTPChunkSource::~HTTPChunkSource()
 
 bool HTTPChunkSource::init(const std::string &url)
 {
+    vlc_mutex_locker locker(&lock);
     params = ConnectionParams(url);
+    params.setUseAccess(usesAccess());
 
     if(params.getScheme() != "http" && params.getScheme() != "https")
         return false;
@@ -161,6 +176,7 @@ bool HTTPChunkSource::init(const std::string &url)
 
 bool HTTPChunkSource::hasMoreData() const
 {
+    vlc_mutex_locker locker(&lock);
     if(eof)
         return false;
     else if(contentLength)
@@ -170,6 +186,7 @@ bool HTTPChunkSource::hasMoreData() const
 
 block_t * HTTPChunkSource::read(size_t readsize)
 {
+    vlc_mutex_locker locker(&lock);
     if(!prepare())
     {
         eof = true;
@@ -216,7 +233,11 @@ block_t * HTTPChunkSource::read(size_t readsize)
 
 std::string HTTPChunkSource::getContentType() const
 {
-    return connection->getContentType();
+    vlc_mutex_locker locker(&lock);
+    if(connection)
+        return connection->getContentType();
+    else
+        return std::string();
 }
 
 bool HTTPChunkSource::prepare()
@@ -239,10 +260,10 @@ bool HTTPChunkSource::prepare()
                 break;
         }
 
-        int i_ret = connection->request(connparams.getPath(), bytesRange);
-        if(i_ret != VLC_SUCCESS)
+        requeststatus = connection->request(connparams.getPath(), bytesRange);
+        if(requeststatus != RequestStatus::Success)
         {
-            if(i_ret == VLC_ETIMEOUT) /* redirection */
+            if(requeststatus == RequestStatus::Redirection)
             {
                 HTTPConnection *httpconn = dynamic_cast<HTTPConnection *>(connection);
                 if(httpconn)
@@ -267,18 +288,16 @@ bool HTTPChunkSource::prepare()
 
 block_t * HTTPChunkSource::readBlock()
 {
-    printf("READ\n");
     return read(HTTPChunkSource::CHUNK_SIZE);
 }
 
 HTTPChunkBufferedSource::HTTPChunkBufferedSource(const std::string& url, AbstractConnectionManager *manager,
-                                                 const adaptive::ID &sourceid) :
-    HTTPChunkSource(url, manager, sourceid),
+                                                 const adaptive::ID &sourceid, bool access) :
+    HTTPChunkSource(url, manager, sourceid, access),
     p_head     (NULL),
     pp_tail    (&p_head),
     buffered     (0)
 {
-    vlc_mutex_init(&lock);
     vlc_cond_init(&avail);
     done = false;
     eof = false;
@@ -304,9 +323,6 @@ HTTPChunkBufferedSource::~HTTPChunkBufferedSource()
     }
     buffered = 0;
     vlc_mutex_unlock(&lock);
-
-    vlc_cond_destroy(&avail);
-    vlc_mutex_destroy(&lock);
 }
 
 bool HTTPChunkBufferedSource::isDone() const
@@ -490,8 +506,8 @@ block_t * HTTPChunkBufferedSource::read(size_t readsize)
 }
 
 HTTPChunk::HTTPChunk(const std::string &url, AbstractConnectionManager *manager,
-                     const adaptive::ID &id):
-    AbstractChunk(new HTTPChunkSource(url, manager, id))
+                     const adaptive::ID &id, bool access):
+    AbstractChunk(new HTTPChunkSource(url, manager, id, access))
 {
 
 }

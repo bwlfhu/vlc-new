@@ -2,7 +2,6 @@
  * stream_output.c : stream output module
  *****************************************************************************
  * Copyright (C) 2002-2007 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Christophe Massiot <massiot@via.ecp.fr>
  *          Laurent Aimar <fenrir@via.ecp.fr>
@@ -110,6 +109,7 @@ sout_instance_t *sout_NewInstance( vlc_object_t *p_parent, const char *psz_dest 
     /* *** init descriptor *** */
     p_sout->psz_sout    = strdup( psz_dest );
     p_sout->i_out_pace_nocontrol = 0;
+    p_sout->b_wants_substreams = false;
 
     vlc_mutex_init( &p_sout->lock );
     p_sout->p_stream = NULL;
@@ -120,6 +120,9 @@ sout_instance_t *sout_NewInstance( vlc_object_t *p_parent, const char *psz_dest 
     if( p_sout->p_stream )
     {
         free( psz_chain );
+        sout_StreamControl( p_sout->p_stream,
+                            SOUT_STREAM_WANTS_SUBSTREAMS,
+                            &p_sout->b_wants_substreams );
         return p_sout;
     }
 
@@ -128,8 +131,7 @@ sout_instance_t *sout_NewInstance( vlc_object_t *p_parent, const char *psz_dest 
 
     FREENULL( p_sout->psz_sout );
 
-    vlc_mutex_destroy( &p_sout->lock );
-    vlc_object_release( p_sout );
+    vlc_object_delete(p_sout);
     return NULL;
 }
 
@@ -144,10 +146,18 @@ void sout_DeleteInstance( sout_instance_t * p_sout )
     /* *** free all string *** */
     FREENULL( p_sout->psz_sout );
 
-    vlc_mutex_destroy( &p_sout->lock );
-
     /* *** free structure *** */
-    vlc_object_release( p_sout );
+    vlc_object_delete(p_sout);
+}
+
+bool sout_instance_ControlsPace( sout_instance_t *sout )
+{
+    bool ret;
+
+    vlc_mutex_lock( &sout->lock );
+    ret = sout->i_out_pace_nocontrol <= 0;
+    vlc_mutex_unlock( &sout->lock );
+    return ret;
 }
 
 /*****************************************************************************
@@ -213,6 +223,32 @@ bool sout_InputIsEmpty( sout_packetizer_input_t *p_input )
         b = true;
     vlc_mutex_unlock( &p_sout->lock );
     return b;
+}
+
+static int sout_InputControlVa( sout_packetizer_input_t *p_input, int i_query, va_list args )
+{
+    sout_instance_t *p_sout = p_input->p_sout;
+    if( i_query == SOUT_INPUT_SET_SPU_HIGHLIGHT )
+    {
+        vlc_mutex_lock( &p_sout->lock );
+        int i_ret = sout_StreamControl( p_sout->p_stream,
+                                        SOUT_STREAM_ID_SPU_HIGHLIGHT,
+                                        p_input->id, va_arg(args, void *) );
+        vlc_mutex_unlock( &p_sout->lock );
+        return i_ret;
+    }
+    return VLC_EGENERIC;
+}
+
+int sout_InputControl( sout_packetizer_input_t *p_input, int i_query, ... )
+{
+    va_list args;
+    int     i_result;
+
+    va_start( args, i_query );
+    i_result = sout_InputControlVa( p_input, i_query, args );
+    va_end( args );
+    return i_result;
 }
 
 void sout_InputFlush( sout_packetizer_input_t *p_input )
@@ -281,7 +317,7 @@ sout_access_out_t *sout_AccessOutNew( vlc_object_t *p_sout,
         free( p_access->psz_path );
 error:
         free( p_access->psz_access );
-        vlc_object_release( p_access );
+        vlc_object_delete(p_access);
         return( NULL );
     }
 
@@ -302,7 +338,7 @@ void sout_AccessOutDelete( sout_access_out_t *p_access )
 
     free( p_access->psz_path );
 
-    vlc_object_release( p_access );
+    vlc_object_delete(p_access);
 }
 
 /*****************************************************************************
@@ -352,17 +388,15 @@ int sout_AccessOutControl (sout_access_out_t *access, int query, ...)
 /*****************************************************************************
  * sout_MuxNew: create a new mux
  *****************************************************************************/
-sout_mux_t * sout_MuxNew( sout_instance_t *p_sout, const char *psz_mux,
-                          sout_access_out_t *p_access )
+sout_mux_t *sout_MuxNew( sout_access_out_t *p_access, const char *psz_mux )
 {
     sout_mux_t *p_mux;
     char       *psz_next;
 
-    p_mux = vlc_custom_create( p_sout, sizeof( *p_mux ), "mux" );
+    p_mux = vlc_custom_create( p_access, sizeof( *p_mux ), "mux" );
     if( p_mux == NULL )
         return NULL;
 
-    p_mux->p_sout = p_sout;
     psz_next = config_ChainCreate( &p_mux->psz_mux, &p_mux->p_cfg, psz_mux );
     free( psz_next );
 
@@ -388,7 +422,7 @@ sout_mux_t * sout_MuxNew( sout_instance_t *p_sout, const char *psz_mux,
     {
         FREENULL( p_mux->psz_mux );
 
-        vlc_object_release( p_mux );
+        vlc_object_delete(p_mux);
         return NULL;
     }
 
@@ -405,28 +439,9 @@ sout_mux_t * sout_MuxNew( sout_instance_t *p_sout, const char *psz_mux,
 
         if( b_answer )
         {
-            msg_Dbg( p_sout, "muxer support adding stream at any time" );
+            msg_Dbg( p_access, "muxer support adding stream at any time" );
             p_mux->b_add_stream_any_time = true;
-            p_mux->b_waiting_stream = false;
-
-            /* If we control the output pace then it's better to wait before
-             * starting muxing (generates better streams/files). */
-            if( !p_sout->i_out_pace_nocontrol )
-            {
-                b_answer = true;
-            }
-            else if( sout_MuxControl( p_mux, MUX_GET_ADD_STREAM_WAIT,
-                                      &b_answer ) )
-            {
-                b_answer = false;
-            }
-
-            if( b_answer )
-            {
-                msg_Dbg( p_sout, "muxer prefers to wait for all ES before "
-                         "starting to mux" );
-                p_mux->b_waiting_stream = true;
-            }
+            p_mux->b_waiting_stream = true;
         }
     }
 
@@ -446,7 +461,7 @@ void sout_MuxDelete( sout_mux_t *p_mux )
 
     config_ChainDestroy( p_mux->p_cfg );
 
-    vlc_object_release( p_mux );
+    vlc_object_delete(p_mux);
 }
 
 /*****************************************************************************
@@ -535,20 +550,12 @@ int sout_MuxSendBuffer( sout_mux_t *p_mux, sout_input_t *p_input,
     vlc_tick_t i_dts = p_buffer->i_dts;
     block_FifoPut( p_input->p_fifo, p_buffer );
 
-    if( p_mux->p_sout->i_out_pace_nocontrol )
-    {
-        vlc_tick_t current_date = vlc_tick_now();
-        if ( current_date > i_dts )
-            msg_Warn( p_mux, "late buffer for mux input (%"PRId64")",
-                      current_date - i_dts );
-    }
-
     if( i_dts == VLC_TICK_INVALID )
         i_dts = p_buffer->i_pts;
 
     if( p_mux->b_waiting_stream && i_dts != VLC_TICK_INVALID )
     {
-        const vlc_tick_t i_caching = VLC_TICK_FROM_MS(var_GetInteger( p_mux->p_sout, "sout-mux-caching" ));
+        const vlc_tick_t i_caching = VLC_TICK_FROM_MS(var_InheritInteger( p_mux, "sout-mux-caching" ));
 
         if( p_mux->i_add_stream_start == VLC_TICK_INVALID )
             p_mux->i_add_stream_start = i_dts;
@@ -746,7 +753,7 @@ static void mrl_Clean( mrl_t *p_mrl )
 /* Destroy a "stream_out" module */
 static void sout_StreamDelete( sout_stream_t *p_stream )
 {
-    sout_instance_t *p_sout = (sout_instance_t *)(p_stream->obj.parent);
+    sout_instance_t *p_sout = (sout_instance_t *)vlc_object_parent(p_stream);
 
     msg_Dbg( p_stream, "destroying chain... (name=%s)", p_stream->psz_name );
 
@@ -760,7 +767,7 @@ static void sout_StreamDelete( sout_stream_t *p_stream )
     config_ChainDestroy( p_stream->p_cfg );
 
     msg_Dbg( p_stream, "destroying chain done" );
-    vlc_object_release( p_stream );
+    vlc_object_delete(p_stream);
 }
 
 /* Destroy a "stream_out" modules chain
@@ -790,6 +797,7 @@ void sout_StreamChainDelete(sout_stream_t *p_first, sout_stream_t *p_last)
 static sout_stream_t *sout_StreamNew( sout_instance_t *p_sout, char *psz_name,
                                config_chain_t *p_cfg, sout_stream_t *p_next)
 {
+    const char *cap = (p_next != NULL) ? "sout filter" : "sout output";
     sout_stream_t *p_stream;
 
     assert(psz_name);
@@ -802,6 +810,7 @@ static sout_stream_t *sout_StreamNew( sout_instance_t *p_sout, char *psz_name,
     p_stream->psz_name = psz_name;
     p_stream->p_cfg    = p_cfg;
     p_stream->p_next   = p_next;
+    p_stream->ops = NULL;
     p_stream->pf_flush = NULL;
     p_stream->pf_control = NULL;
     p_stream->pace_nocontrol = false;
@@ -809,8 +818,7 @@ static sout_stream_t *sout_StreamNew( sout_instance_t *p_sout, char *psz_name,
 
     msg_Dbg( p_sout, "stream=`%s'", p_stream->psz_name );
 
-    p_stream->p_module =
-        module_need( p_stream, "sout stream", p_stream->psz_name, true );
+    p_stream->p_module = module_need( p_stream, cap, p_stream->psz_name, true );
 
     if( !p_stream->p_module )
     {
@@ -974,7 +982,8 @@ rtp:
 }
 
 #undef sout_EncoderCreate
-encoder_t *sout_EncoderCreate( vlc_object_t *p_this )
+encoder_t *sout_EncoderCreate( vlc_object_t *p_this, size_t owner_size )
 {
-    return vlc_custom_create( p_this, sizeof( encoder_t ), "encoder" );
+    assert( owner_size >= sizeof(encoder_t) );
+    return vlc_custom_create( p_this, owner_size, "encoder" );
 }

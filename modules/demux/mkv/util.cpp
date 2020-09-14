@@ -2,7 +2,6 @@
  * util.cpp : matroska demuxer
  *****************************************************************************
  * Copyright (C) 2003-2004 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Steve Lhomme <steve.lhomme@free.fr>
@@ -24,6 +23,7 @@
 #include "mkv.hpp"
 #include "util.hpp"
 #include "demux.hpp"
+#include "../../codec/webvtt/helpers.h"
 
 namespace mkv {
 
@@ -89,6 +89,7 @@ int32_t zlib_decompress_extra( demux_t * p_demux, mkv_track_t & tk )
         msg_Err( p_demux, "Couldn't allocate buffer to inflate data, ignore track %u",
                  tk.i_number );
         inflateEnd( &d_stream );
+        tk.p_extra_data = NULL;
         return 1;
     }
 
@@ -179,6 +180,7 @@ void handle_real_audio(demux_t * p_demux, mkv_track_t * p_tk, block_t * p_blk, v
                 p_sys->p_subpackets[i] = NULL;
             }
         p_sys->i_subpacket = 0;
+        p_sys->i_subpackets = 0;
 
         if ( !( p_blk->i_flags & BLOCK_FLAG_TYPE_I) )
         {
@@ -192,7 +194,9 @@ void handle_real_audio(demux_t * p_demux, mkv_track_t * p_tk, block_t * p_blk, v
         p_tk->fmt.i_codec == VLC_CODEC_ATRAC3 )
     {
         const uint16_t i_num = p_sys->i_frame_size / p_sys->i_subpacket_size;
-        const size_t y = p_sys->i_subpacket / ( p_sys->i_frame_size / p_sys->i_subpacket_size );
+        if ( i_num == 0 )
+            return;
+        const size_t y = p_sys->i_subpacket / i_num;
 
         for( uint16_t i = 0; i < i_num; i++ )
         {
@@ -236,10 +240,78 @@ void handle_real_audio(demux_t * p_demux, mkv_track_t * p_tk, block_t * p_blk, v
             p_sys->p_subpackets[i] = NULL;
         }
         p_sys->i_subpacket = 0;
+        p_sys->i_subpackets = 0;
     }
 }
 
-void send_Block( demux_t * p_demux, mkv_track_t * p_tk, block_t * p_block, unsigned int i_number_frames, vlc_tick_t i_duration )
+block_t *WEBVTT_Repack_Sample(block_t *p_block, bool b_webm,
+                              const uint8_t *p_add, size_t i_add)
+{
+    struct webvtt_cueelements_s els;
+    memset(&els, 0, sizeof(els));
+    size_t newsize = 0;
+    block_t *newblock = nullptr;
+    /* Repack to ISOBMFF samples format */
+    if( !b_webm ) /* S_TEXT/WEBVTT */
+    {
+        /* process addition fields */
+        if( i_add )
+        {
+            const uint8_t *end = p_add + i_add;
+            const uint8_t *iden =
+                    reinterpret_cast<const uint8_t *>(std::memchr( p_add, '\n', i_add ));
+            if( iden && ++iden != end )
+            {
+                els.sttg.p_data = p_add;
+                els.sttg.i_data = &iden[-1] - p_add;
+                const uint8_t *comm =
+                        reinterpret_cast<const uint8_t *>(std::memchr( iden, '\n', end - iden ));
+                els.iden.p_data = iden;
+                if( comm )
+                    els.iden.i_data = comm - iden;
+                else
+                    els.iden.i_data = end - iden;
+            }
+        }
+        /* the payload being in the block */
+        els.payl.p_data = p_block->p_buffer;
+        els.payl.i_data = p_block->i_buffer;
+    }
+    else /* deprecated D_WEBVTT/ */
+    {
+        const uint8_t *start = p_block->p_buffer;
+        const uint8_t *end = p_block->p_buffer + p_block->i_buffer;
+        const uint8_t *sttg =
+                reinterpret_cast<const uint8_t *>(std::memchr( start, '\n', p_block->i_buffer ));
+        if( !sttg || ++sttg == end )
+            goto error;
+        const uint8_t *payl =
+                reinterpret_cast<const uint8_t *>(std::memchr( sttg, '\n', end - sttg ));
+        if( !payl || ++payl == end )
+            goto error;
+        els.iden.p_data = start;
+        els.iden.i_data = &sttg[-1] - start;
+        els.sttg.p_data = sttg;
+        els.sttg.i_data = &payl[-1] - sttg;
+        els.payl.p_data = payl;
+        els.payl.i_data = end - payl;
+    }
+
+    newsize = WEBVTT_Pack_CueElementsGetNewSize( &els );
+    newblock = block_Alloc( newsize );
+    if( !newblock )
+        goto error;
+    WEBVTT_Pack_CueElements( &els, newblock->p_buffer );
+    block_CopyProperties( newblock, p_block );
+    block_Release( p_block );
+    return newblock;
+
+error:
+    block_Release( p_block );
+    return NULL;
+}
+
+void send_Block( demux_t * p_demux, mkv_track_t * p_tk, block_t * p_block, unsigned int i_number_frames, int64_t i_duration )
 {
     demux_sys_t *p_sys = (demux_sys_t *)p_demux->p_sys;
     matroska_segment_c *p_segment = p_sys->p_current_vsegment->CurrentSegment();
@@ -259,8 +331,8 @@ void send_Block( demux_t * p_demux, mkv_track_t * p_tk, block_t * p_block, unsig
 
     if( !p_tk->b_no_duration )
     {
-        p_block->i_length = i_duration * p_tk->f_timecodescale *
-            (double) p_segment->i_timescale / ( 1000.0 * i_number_frames );
+        p_block->i_length = VLC_TICK_FROM_NS(i_duration * p_tk->f_timecodescale *
+                                             p_segment->i_timescale) / i_number_frames;
     }
 
     if( p_tk->b_discontinuity )

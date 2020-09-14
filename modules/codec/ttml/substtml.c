@@ -38,6 +38,7 @@
 #include "substext.h"
 #include "ttml.h"
 #include "imageupdater.h"
+#include "ttmlpes.h"
 
 //#define TTML_DEBUG
 
@@ -59,6 +60,7 @@ typedef struct
 #define TTML_DEFAULT_CELL_RESOLUTION_H 32
 #define TTML_DEFAULT_CELL_RESOLUTION_V 15
 #define TTML_LINE_TO_HEIGHT_RATIO      1.06
+
 
 typedef struct
 {
@@ -103,6 +105,7 @@ typedef struct
 typedef struct
 {
     int                     i_align;
+    struct ttml_in_pes_ctx  pes;
 } decoder_sys_t;
 
 enum
@@ -1158,8 +1161,9 @@ static picture_t * picture_CreateFromPNG( decoder_t *p_dec,
         return NULL;
     video_format_t fmt_out;
     video_format_Init( &fmt_out, VLC_CODEC_YUVA );
-    video_format_t fmt_in;
-    video_format_Init( &fmt_in, VLC_CODEC_PNG );
+    es_format_t es_in;
+    es_format_Init( &es_in, VIDEO_ES, VLC_CODEC_PNG );
+    es_in.video.i_chroma = es_in.i_codec;
 
     block_t *p_block = block_Alloc( i_data );
     if( !p_block )
@@ -1167,16 +1171,21 @@ static picture_t * picture_CreateFromPNG( decoder_t *p_dec,
     memcpy( p_block->p_buffer, p_data, i_data );
 
     picture_t *p_pic = NULL;
-    int i_flags = p_dec->obj.flags;
-    p_dec->obj.flags |= OBJECT_FLAGS_NOINTERACT|OBJECT_FLAGS_QUIET;
+    struct vlc_logger *logger = p_dec->obj.logger;
+    bool no_interact = p_dec->obj.no_interact;
+    p_dec->obj.logger = NULL;
+    p_dec->obj.no_interact = true;
     image_handler_t *p_image = image_HandlerCreate( p_dec );
     if( p_image )
     {
-        p_pic = image_Read( p_image, p_block, &fmt_in, &fmt_out );
+        p_pic = image_Read( p_image, p_block, &es_in, &fmt_out );
         image_HandlerDelete( p_image );
     }
     else block_Release( p_block );
-    p_dec->obj.flags = i_flags;
+    p_dec->obj.no_interact = no_interact;
+    p_dec->obj.logger = logger;
+    es_format_Clean( &es_in );
+    video_format_Clean( &fmt_out );
 
     return p_pic;
 }
@@ -1215,6 +1224,8 @@ static void TTMLRegionsToSpuBitmapRegions( decoder_t *p_dec, subpicture_t *p_spu
 
 static int ParseBlock( decoder_t *p_dec, const block_t *p_block )
 {
+    decoder_sys_t *p_sys = p_dec->p_sys;
+
     tt_time_t *p_timings_array = NULL;
     size_t   i_timings_count = 0;
 
@@ -1248,15 +1259,23 @@ static int ParseBlock( decoder_t *p_dec, const block_t *p_block )
         printf("%ld ", tt_time_Convert( &p_timings_array[i] ) );
     printf("\n");
 #endif
+    vlc_tick_t i_block_start_time = p_block->i_dts - p_sys->pes.i_offset;
+
+    if(TTML_in_PES(p_dec) && i_block_start_time < p_sys->pes.i_prev_segment_start_time )
+        i_block_start_time = p_sys->pes.i_prev_segment_start_time;
 
     for( size_t i=0; i+1 < i_timings_count; i++ )
     {
         /* We Only support absolute timings (2) */
-        if( tt_time_Convert( &p_timings_array[i] ) + VLC_TICK_0 < p_block->i_dts )
+        if( tt_time_Convert( &p_timings_array[i] ) + VLC_TICK_0 < i_block_start_time )
             continue;
 
-        if( tt_time_Convert( &p_timings_array[i] ) + VLC_TICK_0 > p_block->i_dts + p_block->i_length )
+        if( !TTML_in_PES(p_dec) &&
+            tt_time_Convert( &p_timings_array[i] ) + VLC_TICK_0 > i_block_start_time + p_block->i_length )
             break;
+
+        if( TTML_in_PES(p_dec) && p_sys->pes.i_prev_segment_start_time < tt_time_Convert( &p_timings_array[i] ) )
+            p_sys->pes.i_prev_segment_start_time = tt_time_Convert( &p_timings_array[i] );
 
         bool b_bitmap_regions = false;
         subpicture_t *p_spu = NULL;
@@ -1276,8 +1295,10 @@ static int ParseBlock( decoder_t *p_dec, const block_t *p_block )
 
         if( p_regions && p_spu )
         {
-            p_spu->i_start    = VLC_TICK_0 + tt_time_Convert( &p_timings_array[i] );
-            p_spu->i_stop     = VLC_TICK_0 + tt_time_Convert( &p_timings_array[i+1] ) - 1;
+            p_spu->i_start    = p_sys->pes.i_offset +
+                                VLC_TICK_0 + tt_time_Convert( &p_timings_array[i] );
+            p_spu->i_stop     = p_sys->pes.i_offset +
+                                VLC_TICK_0 + tt_time_Convert( &p_timings_array[i+1] ) - 1;
             p_spu->b_ephemer  = true;
             p_spu->b_absolute = true;
 
@@ -1307,7 +1328,6 @@ static int ParseBlock( decoder_t *p_dec, const block_t *p_block )
 }
 
 
-
 /****************************************************************************
  * DecodeBlock: the whole thing
  ****************************************************************************/
@@ -1328,6 +1348,21 @@ static int DecodeBlock( decoder_t *p_dec, block_t *p_block )
     return ret;
 }
 
+static int DecodePESBlock( decoder_t *p_dec, block_t *p_block )
+{
+    decoder_sys_t *p_sys = p_dec->p_sys;
+    return ParsePESEncap( p_dec, &p_sys->pes, DecodeBlock, p_block );
+}
+
+/*****************************************************************************
+ * Flush state between seeks
+ *****************************************************************************/
+static void Flush( decoder_t *p_dec )
+{
+    decoder_sys_t *p_sys = p_dec->p_sys;
+    ttml_in_pes_Init( &p_sys->pes );
+}
+
 /*****************************************************************************
  * tt_OpenDecoder: probe the decoder and return score
  *****************************************************************************/
@@ -1336,7 +1371,8 @@ int tt_OpenDecoder( vlc_object_t *p_this )
     decoder_t *p_dec = (decoder_t*)p_this;
     decoder_sys_t *p_sys;
 
-    if( p_dec->fmt_in.i_codec != VLC_CODEC_TTML )
+    if( p_dec->fmt_in.i_codec != VLC_CODEC_TTML &&
+        !TTML_in_PES(p_dec) )
         return VLC_EGENERIC;
 
     /* Allocate the memory needed to store the decoder's structure */
@@ -1344,8 +1380,13 @@ int tt_OpenDecoder( vlc_object_t *p_this )
     if( unlikely( p_sys == NULL ) )
         return VLC_ENOMEM;
 
-    p_dec->pf_decode = DecodeBlock;
+    if( !TTML_in_PES( p_dec ) )
+        p_dec->pf_decode = DecodeBlock;
+    else
+        p_dec->pf_decode = DecodePESBlock;
+    p_dec->pf_flush = Flush;
     p_sys->i_align = var_InheritInteger( p_dec, "ttml-align" );
+    ttml_in_pes_Init( &p_sys->pes );
 
     return VLC_SUCCESS;
 }

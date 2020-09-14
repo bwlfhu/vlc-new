@@ -3,7 +3,7 @@
  *****************************************************************************
  * Copyright © 2004-2018 VLC authors and VideoLAN
  *
- * Authors: Rémi Denis-Courmont <rem # videolan.org> (original plugin)
+ * Authors: Rémi Denis-Courmont (original plugin)
  *          Christian Henz <henz # c-lab.de>
  *          Mirsal Ennaime <mirsal dot ennaime at gmail dot com>
  *          Hugo Beauzée-Luyssen <hugo@beauzee.fr>
@@ -28,8 +28,6 @@
 # include "config.h"
 #endif
 
-#include <vlc_common.h>
-
 #ifdef _WIN32
 #include <windows.h>
 #include <wincrypt.h>
@@ -39,7 +37,7 @@
 
 UpnpInstanceWrapper* UpnpInstanceWrapper::s_instance;
 UpnpInstanceWrapper::Listeners UpnpInstanceWrapper::s_listeners;
-vlc_mutex_t UpnpInstanceWrapper::s_lock = VLC_STATIC_MUTEX;
+vlc::threads::mutex UpnpInstanceWrapper::s_lock;
 
 UpnpInstanceWrapper::UpnpInstanceWrapper()
     : m_handle( -1 )
@@ -55,7 +53,7 @@ UpnpInstanceWrapper::~UpnpInstanceWrapper()
 
 UpnpInstanceWrapper *UpnpInstanceWrapper::get(vlc_object_t *p_obj)
 {
-    vlc_mutex_locker lock( &s_lock );
+    vlc::threads::mutex_locker lock( s_lock );
     if ( s_instance == NULL )
     {
         UpnpInstanceWrapper* instance = new(std::nothrow) UpnpInstanceWrapper;
@@ -87,7 +85,7 @@ UpnpInstanceWrapper *UpnpInstanceWrapper::get(vlc_object_t *p_obj)
         ixmlRelaxParser( 1 );
 
         /* Register a control point */
-        i_res = UpnpRegisterClient( Callback, instance, &instance->m_handle );
+        i_res = UpnpRegisterClient( Callback, NULL, &instance->m_handle );
         if( i_res != UPNP_E_SUCCESS )
         {
             msg_Err( p_obj, "Client registration failed: %s", UpnpGetErrorMessage( i_res ) );
@@ -114,13 +112,12 @@ UpnpInstanceWrapper *UpnpInstanceWrapper::get(vlc_object_t *p_obj)
 void UpnpInstanceWrapper::release()
 {
     UpnpInstanceWrapper *p_delete = NULL;
-    vlc_mutex_lock( &s_lock );
+    vlc::threads::mutex_locker lock( s_lock );
     if (--s_instance->m_refcount == 0)
     {
         p_delete = s_instance;
         s_instance = NULL;
     }
-    vlc_mutex_unlock( &s_lock );
     delete p_delete;
 }
 
@@ -131,6 +128,7 @@ UpnpClient_Handle UpnpInstanceWrapper::handle() const
 
 int UpnpInstanceWrapper::Callback(Upnp_EventType event_type, UpnpEventPtr p_event, void *p_user_data)
 {
+    vlc::threads::mutex_locker lock( s_lock );
     for (Listeners::iterator iter = s_listeners.begin(); iter != s_listeners.end(); ++iter)
     {
         (*iter)->onEvent(event_type, p_event, p_user_data);
@@ -141,26 +139,15 @@ int UpnpInstanceWrapper::Callback(Upnp_EventType event_type, UpnpEventPtr p_even
 
 void UpnpInstanceWrapper::addListener(ListenerPtr listener)
 {
-    vlc_mutex_lock( &s_lock );
-    if ( std::find( s_listeners.begin(), s_listeners.end(), listener) != s_listeners.end() )
-    {
-        vlc_mutex_unlock( &s_lock );
-        return;
-    }
-    s_listeners.push_back( std::move(listener) );
-    vlc_mutex_unlock( &s_lock );
+    vlc::threads::mutex_locker lock( s_lock );
+    if ( std::find( s_listeners.begin(), s_listeners.end(), listener) == s_listeners.end() )
+        s_listeners.push_back( std::move(listener) );
 }
 
 void UpnpInstanceWrapper::removeListener(ListenerPtr listener)
 {
-    vlc_mutex_lock( &s_lock );
+    vlc::threads::mutex_locker lock( s_lock );
     Listeners::iterator iter = std::find( s_listeners.begin(), s_listeners.end(), listener );
-    if ( iter == s_listeners.end() )
-    {
-        vlc_mutex_unlock( &s_lock );
-        return;
-    }
-
-    s_listeners.erase( iter );
-    vlc_mutex_unlock( &s_lock );
+    if ( iter != s_listeners.end() )
+        s_listeners.erase( iter );
 }

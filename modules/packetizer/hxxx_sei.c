@@ -22,11 +22,12 @@
 #endif
 
 #include <vlc_common.h>
-#include <vlc_bits.h>
 #include <vlc_block.h>
+#include <vlc_bits.h>
 
 #include "hxxx_sei.h"
 #include "hxxx_nal.h"
+#include "hxxx_ep3b.h"
 
 void HxxxParse_AnnexB_SEI(const uint8_t *p_buf, size_t i_buf,
                           uint8_t i_header, pf_hxxx_sei_callback cb, void *cbdata)
@@ -39,21 +40,22 @@ void HxxxParseSEI(const uint8_t *p_buf, size_t i_buf,
                   uint8_t i_header, pf_hxxx_sei_callback pf_callback, void *cbdata)
 {
     bs_t s;
-    unsigned i_bitflow = 0;
     bool b_continue = true;
 
     if( i_buf <= i_header )
         return;
 
-    bs_init( &s, &p_buf[i_header], i_buf - i_header ); /* skip nal unit header */
-    s.p_fwpriv = &i_bitflow;
-    s.pf_forward = hxxx_bsfw_ep3b_to_rbsp;  /* Does the emulated 3bytes conversion to rbsp */
+    struct hxxx_bsfw_ep3b_ctx_s bsctx;
+    hxxx_bsfw_ep3b_ctx_init( &bsctx );
+    bs_init_custom( &s, &p_buf[i_header], i_buf - i_header, /* skip nal unit header */
+                    &hxxx_bsfw_ep3b_callbacks, &bsctx );
 
-    while( bs_remain( &s ) >= 8 && bs_aligned( &s ) && b_continue )
+
+    while( !bs_eof( &s ) && bs_aligned( &s ) && b_continue )
     {
         /* Read type */
         unsigned i_type = 0;
-        while( bs_remain( &s ) >= 8 )
+        while( !bs_eof( &s ) )
         {
             const uint8_t i_byte = bs_read( &s, 8 );
             i_type += i_byte;
@@ -61,9 +63,12 @@ void HxxxParseSEI(const uint8_t *p_buf, size_t i_buf,
                 break;
         }
 
+        if( bs_error( &s ) )
+            return;
+
         /* Read size */
         unsigned i_size = 0;
-        while( bs_remain( &s ) >= 8 )
+        while( !bs_eof( &s ) )
         {
             const uint8_t i_byte = bs_read( &s, 8 );
             i_size += i_byte;
@@ -71,8 +76,11 @@ void HxxxParseSEI(const uint8_t *p_buf, size_t i_buf,
                 break;
         }
 
+        if( bs_error( &s ) )
+            return;
+
         /* Check room */
-        if( bs_remain( &s ) < 8 )
+        if( bs_eof( &s ) )
             break;
 
         hxxx_sei_data_t sei_data;
@@ -97,8 +105,11 @@ void HxxxParseSEI(const uint8_t *p_buf, size_t i_buf,
                 if( !p_t35 )
                     break;
 
-                for( i_t35 = 0; i_t35<i_size && bs_remain( &s ) >= 8; i_t35++ )
+                for( i_t35 = 0; i_t35<i_size && !bs_eof( &s ); i_t35++ )
                     p_t35[i_t35] = bs_read( &s, 8 );
+
+                if( bs_error( &s ) )
+                    break;
 
                 /* TS 101 154 Auxiliary Data and H264/AVC video */
                 if( i_t35 > 4 && p_t35[0] == 0xb5 /* United States */ )
@@ -166,25 +177,23 @@ void HxxxParseSEI(const uint8_t *p_buf, size_t i_buf,
 
             case HXXX_SEI_MASTERING_DISPLAY_COLOUR_VOLUME:
             {
-                if ( bs_remain( &s ) < (16*6+16*2+32+32) )
-                    /* not enough data */
-                    break;
                 for ( size_t i = 0; i < 6 ; ++i)
                     sei_data.colour_volume.primaries[i] = bs_read( &s, 16 );
                 for ( size_t i = 0; i < 2 ; ++i)
                     sei_data.colour_volume.white_point[i] = bs_read( &s, 16 );
                 sei_data.colour_volume.max_luminance = bs_read( &s, 32 );
                 sei_data.colour_volume.min_luminance = bs_read( &s, 32 );
+                if( bs_error( &s ) ) /* not enough data */
+                    break;
                 b_continue = pf_callback( &sei_data, cbdata );
             } break;
 
             case HXXX_SEI_CONTENT_LIGHT_LEVEL:
             {
-                if ( bs_remain( &s ) < (16+16) )
-                    /* not enough data */
-                    break;
                 sei_data.content_light_lvl.MaxCLL = bs_read( &s, 16 );
                 sei_data.content_light_lvl.MaxFALL = bs_read( &s, 16 );
+                if( bs_error( &s ) ) /* not enough data */
+                    break;
                 b_continue = pf_callback( &sei_data, cbdata );
             } break;
 

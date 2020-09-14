@@ -2,7 +2,6 @@
  * visual.c : Visualisation system
  *****************************************************************************
  * Copyright (C) 2002-2009 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Clément Stenac <zorglub@via.ecp.fr>
  *
@@ -36,6 +35,7 @@
 #include <vlc_vout.h>
 #include <vlc_aout.h>
 #include <vlc_filter.h>
+#include <vlc_queue.h>
 
 #include "visual.h"
 
@@ -175,14 +175,16 @@ vlc_module_end ()
  * Local prototypes
  *****************************************************************************/
 static block_t *DoWork( filter_t *, block_t * );
+static void Flush( filter_t * );
 static void *Thread( void *);
 
 typedef struct
 {
-    block_fifo_t    *fifo;
+    vlc_queue_t     queue;
     vout_thread_t   *p_vout;
     visual_effect_t **effect;
     int             i_effect;
+    bool            dead;
     vlc_thread_t    thread;
 } filter_sys_t;
 
@@ -298,32 +300,31 @@ static int Open( vlc_object_t *p_this )
         .i_visible_height = height,
         .i_sar_num = 1,
         .i_sar_den = 1,
+        .transfer = TRANSFER_FUNC_SRGB,
+        .primaries = COLOR_PRIMARIES_SRGB,
+        .space = COLOR_SPACE_SRGB,
     };
-    p_sys->p_vout = aout_filter_RequestVout( p_filter, NULL, &fmt );
+    p_sys->p_vout = aout_filter_GetVout( p_filter, &fmt );
     if( p_sys->p_vout == NULL )
     {
         msg_Err( p_filter, "no suitable vout module" );
         goto error;
     }
 
-    p_sys->fifo = block_FifoNew();
-    if( unlikely( p_sys->fifo == NULL ) )
-    {
-        aout_filter_RequestVout( p_filter, p_sys->p_vout, NULL );
-        goto error;
-    }
+    p_sys->dead = false;
+    vlc_queue_Init(&p_sys->queue, offsetof (block_t, p_next));
 
     if( vlc_clone( &p_sys->thread, Thread, p_filter,
                    VLC_THREAD_PRIORITY_VIDEO ) )
     {
-        block_FifoRelease( p_sys->fifo );
-        aout_filter_RequestVout( p_filter, p_sys->p_vout, NULL );
+        vout_Close( p_sys->p_vout );
         goto error;
     }
 
     p_filter->fmt_in.audio.i_format = VLC_CODEC_FL32;
     p_filter->fmt_out.audio = p_filter->fmt_in.audio;
     p_filter->pf_audio_filter = DoWork;
+    p_filter->pf_flush = Flush;
     return VLC_SUCCESS;
 
 error:
@@ -373,25 +374,26 @@ static void *Thread( void *data )
 {
     filter_t *p_filter = data;
     filter_sys_t *sys = p_filter->p_sys;
+    block_t *block;
 
-    for (;;)
-    {
-        block_t *block = block_FifoGet( sys->fifo );
-
-        int canc = vlc_savecancel( );
+    while ((block = vlc_queue_DequeueKillable(&sys->queue, &sys->dead)))
         block_Release( DoRealWork( p_filter, block ) );
-        vlc_restorecancel( canc );
-    }
-    vlc_assert_unreachable();
+
+    return NULL;
 }
 
 static block_t *DoWork( filter_t *p_filter, block_t *p_in_buf )
 {
-    block_t *block = block_Duplicate( p_in_buf );
     filter_sys_t *p_sys = p_filter->p_sys;
-    if( likely(block != NULL) )
-        block_FifoPut( p_sys->fifo, block );
+
+    vlc_queue_Enqueue(&p_sys->queue, block_Duplicate(p_in_buf));
     return p_in_buf;
+}
+
+static void Flush( filter_t *p_filter )
+{
+    filter_sys_t *p_sys = p_filter->p_sys;
+    vout_FlushAll( p_sys->p_vout );
 }
 
 /*****************************************************************************
@@ -402,10 +404,9 @@ static void Close( vlc_object_t *p_this )
     filter_t * p_filter = (filter_t *)p_this;
     filter_sys_t *p_sys = p_filter->p_sys;
 
-    vlc_cancel( p_sys->thread );
+    vlc_queue_Kill(&p_sys->queue, &p_sys->dead);
     vlc_join( p_sys->thread, NULL );
-    block_FifoRelease( p_sys->fifo );
-    aout_filter_RequestVout( p_filter, p_sys->p_vout, NULL );
+    vout_Close( p_sys->p_vout );
 
     /* Free the list */
     for( int i = 0; i < p_sys->i_effect; i++ )

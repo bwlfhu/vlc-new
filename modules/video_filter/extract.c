@@ -2,7 +2,6 @@
  * extract.c : Extract RGB components
  *****************************************************************************
  * Copyright (C) 2000-2006 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Antoine Cellerier <dionoea .t videolan d@t org>
  *
@@ -158,7 +157,6 @@ static void Destroy( vlc_object_t *p_this )
 
     var_DelCallback( p_filter, FILTER_PREFIX "component", ExtractCallback,
                      p_sys );
-    vlc_mutex_destroy( &p_sys->lock );
     free( p_sys->projection_matrix );
     free( p_sys );
 }

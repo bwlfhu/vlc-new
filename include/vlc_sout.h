@@ -2,7 +2,6 @@
  * vlc_sout.h : stream output module
  *****************************************************************************
  * Copyright (C) 2002-2008 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Christophe Massiot <massiot@via.ecp.fr>
  *          Laurent Aimar <fenrir@via.ecp.fr>
@@ -47,12 +46,13 @@ extern "C" {
  * invalid unsynchronized access) */
 struct sout_instance_t
 {
-    struct vlc_common_members obj;
+    struct vlc_object_t obj;
 
     char *psz_sout;
 
     /** count of output that can't control the space */
     int                 i_out_pace_nocontrol;
+    bool                b_wants_substreams;
 
     vlc_mutex_t         lock;
     sout_stream_t       *p_stream;
@@ -67,7 +67,7 @@ struct sout_instance_t
 /** Stream output access_output */
 struct sout_access_out_t
 {
-    struct vlc_common_members obj;
+    struct vlc_object_t obj;
 
     module_t                *p_module;
     char                    *psz_access;
@@ -115,10 +115,8 @@ static inline bool sout_AccessOutCanControlPace( sout_access_out_t *p_ao )
 /** Muxer structure */
 struct  sout_mux_t
 {
-    struct vlc_common_members obj;
+    struct vlc_object_t obj;
     module_t            *p_module;
-
-    sout_instance_t     *p_sout;
 
     char                *psz_mux;
     config_chain_t          *p_cfg;
@@ -151,7 +149,6 @@ enum sout_mux_query_e
     /* capabilities */
     MUX_CAN_ADD_STREAM_WHILE_MUXING,    /* arg1= bool *,      res=cannot fail */
     /* properties */
-    MUX_GET_ADD_STREAM_WAIT,            /* arg1= bool *,      res=cannot fail */
     MUX_GET_MIME,                       /* arg1= char **            res=can fail    */
 };
 
@@ -164,7 +161,7 @@ struct sout_input_t
 };
 
 
-VLC_API sout_mux_t * sout_MuxNew( sout_instance_t*, const char *, sout_access_out_t * ) VLC_USED;
+VLC_API sout_mux_t * sout_MuxNew( sout_access_out_t *, const char * ) VLC_USED;
 VLC_API sout_input_t *sout_MuxAddStream( sout_mux_t *, const es_format_t * ) VLC_USED;
 VLC_API void sout_MuxDeleteStream( sout_mux_t *, sout_input_t * );
 VLC_API void sout_MuxDelete( sout_mux_t * );
@@ -187,11 +184,21 @@ static inline int sout_MuxControl( sout_mux_t *p_mux, int i_query, ... )
 
 enum sout_stream_query_e {
     SOUT_STREAM_EMPTY,    /* arg1=bool *,       res=can fail (assume true) */
+    SOUT_STREAM_WANTS_SUBSTREAMS,  /* arg1=bool *, res=can fail (assume false) */
+    SOUT_STREAM_ID_SPU_HIGHLIGHT,  /* arg1=void *, arg2=const vlc_spu_highlight_t *, res=can fail */
+};
+
+struct sout_stream_operations {
+    void *(*add)(sout_stream_t *, const es_format_t *);
+    void (*del)(sout_stream_t *, void *);
+    int (*send)(sout_stream_t *, void *, block_t *);
+    int (*control)( sout_stream_t *, int, va_list );
+    void (*flush)( sout_stream_t *, void *);
 };
 
 struct sout_stream_t
 {
-    struct vlc_common_members obj;
+    struct vlc_object_t obj;
 
     module_t          *p_module;
     sout_instance_t   *p_sout;
@@ -199,6 +206,8 @@ struct sout_stream_t
     char              *psz_name;
     config_chain_t    *p_cfg;
     sout_stream_t     *p_next;
+
+    const struct sout_stream_operations *ops;
 
     /* add, remove a stream */
     void             *(*pf_add)( sout_stream_t *, const es_format_t * );
@@ -219,31 +228,51 @@ VLC_API sout_stream_t *sout_StreamChainNew(sout_instance_t *p_sout,
 static inline void *sout_StreamIdAdd( sout_stream_t *s,
                                       const es_format_t *fmt )
 {
-    return s->pf_add( s, fmt );
+    if (s->ops == NULL)
+        return s->pf_add(s, fmt);
+    return s->ops->add(s, fmt);
 }
 
 static inline void sout_StreamIdDel( sout_stream_t *s,
                                      void *id )
 {
-    s->pf_del( s, id );
+    if (s->ops == NULL) {
+        s->pf_del(s, id);
+        return;
+    }
+    s->ops->del(s, id);
 }
 
 static inline int sout_StreamIdSend( sout_stream_t *s,
                                      void *id, block_t *b )
 {
-    return s->pf_send( s, id, b );
+    if (s->ops == NULL)
+        return s->pf_send(s, id, b);
+    return s->ops->send(s, id, b);
 }
 
 static inline void sout_StreamFlush( sout_stream_t *s,
                                      void *id )
 {
-    if (s->pf_flush)
-        s->pf_flush( s, id );
+    if (s->ops == NULL) {
+        if (s->pf_flush != NULL)
+            s->pf_flush(s, id);
+        return;
+   }
+   if (s->ops->flush != NULL)
+        s->ops->flush(s, id);
 }
 
 static inline int sout_StreamControlVa( sout_stream_t *s, int i_query, va_list args )
 {
-    return s->pf_control ? s->pf_control( s, i_query, args ) : VLC_EGENERIC;
+    if (s->ops == NULL) {
+        if (s->pf_control == NULL)
+            return VLC_EGENERIC;
+        return s->pf_control(s, i_query, args);
+    }
+    if (s->ops->control == NULL)
+        return VLC_EGENERIC;
+    return s->ops->control(s, i_query, args);
 }
 
 static inline int sout_StreamControl( sout_stream_t *s, int i_query, ... )
@@ -261,8 +290,8 @@ static inline int sout_StreamControl( sout_stream_t *s, int i_query, ... )
  * Encoder
  ****************************************************************************/
 
-VLC_API encoder_t * sout_EncoderCreate( vlc_object_t *obj );
-#define sout_EncoderCreate(o) sout_EncoderCreate(VLC_OBJECT(o))
+VLC_API encoder_t * sout_EncoderCreate( vlc_object_t *, size_t );
+#define sout_EncoderCreate(o,s) sout_EncoderCreate(VLC_OBJECT(o),s)
 
 /****************************************************************************
  * Announce handler
@@ -273,31 +302,6 @@ VLC_API void sout_AnnounceUnRegister(vlc_object_t *,session_descriptor_t* );
         sout_AnnounceRegisterSDP(VLC_OBJECT (o), sdp, addr)
 #define sout_AnnounceUnRegister(o, a) \
         sout_AnnounceUnRegister(VLC_OBJECT (o), a)
-
-/** SDP */
-
-struct sockaddr;
-struct vlc_memstream;
-
-VLC_API int vlc_sdp_Start(struct vlc_memstream *, vlc_object_t *obj,
-                          const char *cfgpref,
-                          const struct sockaddr *src, size_t slen,
-                          const struct sockaddr *addr, size_t alen) VLC_USED;
-VLC_API void sdp_AddMedia(struct vlc_memstream *, const char *type,
-                          const char *protocol, int dport, unsigned pt,
-                          bool bw_indep, unsigned bw, const char *ptname,
-                          unsigned clockrate, unsigned channels,
-                          const char *fmtp);
-VLC_API void sdp_AddAttribute(struct vlc_memstream *, const char *name,
-                              const char *fmt, ...) VLC_FORMAT(3, 4);
-
-/** Description module */
-typedef struct sout_description_data_t
-{
-    int i_es;
-    es_format_t **es;
-    vlc_sem_t *sem;
-} sout_description_data_t;
 
 /** @} */
 

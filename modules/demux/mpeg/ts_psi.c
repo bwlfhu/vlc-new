@@ -54,8 +54,10 @@
 #include "ts_psip.h"
 #include "ts_si.h"
 #include "ts_metadata.h"
+#include "ts_descriptions.h"
 
-#include "../access/dtv/en50221_capmt.h"
+#include "../../access/dtv/en50221_capmt.h"
+#include "ts_streamwrapper.h"
 
 #include <assert.h>
 
@@ -421,10 +423,10 @@ static void SetupAudioExtendedDescriptors( demux_t *p_demux, ts_es_t *p_es,
         if( p_dr && p_dr->i_length > 1 && p_dr->p_data[0] == 0x06 /* Tag extension */ )
         {
             static const char *editorial_classification_coding[] = {
-                N_("Main audio"),
-                N_("Audio description for the visually impaired"),
-                N_("Clean audio for the hearing impaired"),
-                N_("Spoken subtitles for the visually impaired"),
+                DESC_MAIN_AUDIO,
+                DESC_AUDIO_DESC_VISUALLY_IMPAIRED,
+                DESC_CLEAN_AUDIO_HEARING_IMPAIRED,
+                DESC_SPOKEN_SUBTITLES_VISUAL_IMP,
             };
 
             uint8_t i_audio_type = (p_dr->p_data[1] & 0x7F) >> 2;
@@ -460,9 +462,9 @@ static char *GetIso639AudioTypeDesc( uint8_t type )
 {
     static const char *audio_type[] = {
         /* "Main audio", */
-        N_("clean effects"),
-        N_("hearing impaired"),
-        N_("visual impaired commentary"),
+        DESC_CLEAN_EFFECTS,
+        DESC_CLEAN_AUDIO_HEARING_IMPAIRED,
+        DESC_VISUAL_IMPAIRED_COMMENTS,
     };
 
     if ( type == 0 || type >= ARRAY_SIZE(audio_type) )
@@ -652,7 +654,7 @@ static void SetupAVCDescriptors( demux_t *p_demux, ts_es_t *p_es, const dvbpsi_p
     {
         p_es->fmt.i_profile = p_dr->p_data[0];
         p_es->fmt.i_level = p_dr->p_data[2];
-        msg_Dbg( p_demux, "     - found AVC_video_descriptor profile=0x%"PRIx8" level=0x%"PRIx8,
+        msg_Dbg( p_demux, "     - found AVC_video_descriptor profile=0x%.2x level=0x%.2x",
                  p_es->fmt.i_profile, p_es->fmt.i_level );
     }
 }
@@ -680,8 +682,84 @@ static void SetupJ2KDescriptors( demux_t *p_demux, ts_es_t *p_es, const dvbpsi_p
             if( p_es->fmt.p_extra )
                 p_es->fmt.i_extra = p_dr->i_length - 24;
         }
-        msg_Dbg( p_demux, "     - found J2K_video_descriptor profile=0x%"PRIx8" level=0x%"PRIx8,
+        msg_Dbg( p_demux, "     - found J2K_video_descriptor profile=0x%.2x level=0x%.2x",
                  p_es->fmt.i_profile, p_es->fmt.i_level );
+    }
+}
+
+static void SetupTTMLExtendedDescriptor( demux_t *p_demux,
+                                         const dvbpsi_descriptor_t *p_dr, es_format_t *p_fmt )
+{
+    static const struct
+    {
+        uint8_t val;
+        const char * psz;
+    } subtitle_purpose[] = {
+        { 0x00, DESC_SUBS_SAME_LANG },
+        { 0x01, DESC_SUBS_FOREIGN_LANG },
+        { 0x02, DESC_SUBS_ALL_LANG },
+        { 0x10, DESC_SUBS_HEARING_IMPAIRED },
+        { 0x11, DESC_SUBS_HEARING_IMPAIRED },
+        { 0x12, DESC_SUBS_HEARING_IMPAIRED },
+        { 0x30, DESC_SUBS_AUDIO_DESCRIPTION_TRANS },
+        { 0x31, DESC_SUBS_COMMENTARY },
+    };
+
+    if( p_dr->i_length < 9 )
+        return;
+
+    msg_Dbg( p_demux, "     - found TTML_descriptor" );
+    if( !p_fmt->psz_language )
+    {
+        p_fmt->psz_language = strndup( (const char *)&p_dr->p_data[1], 3 );
+        msg_Dbg( p_demux, "       language: %s", p_fmt->psz_language );
+    }
+
+    /* variable members */
+    const uint8_t *p_data = &p_dr->p_data[6];
+    size_t i_data = p_dr->i_length - 6;
+
+    /* profiles */
+    uint8_t i_profiles_count = (p_dr->p_data[5] & 0x0F);
+    if( i_data <= i_profiles_count )
+        goto end;
+    p_data += i_profiles_count;
+    i_data -= i_profiles_count;
+
+    /* qualifier */
+    if( p_dr->p_data[5] & 0x40 )
+    {
+        if( i_data <= 4 )
+            goto end;
+        p_data += 4;
+        i_data -= 4;
+    }
+
+    /* font usage */
+    if( p_dr->p_data[5] & 0x80 )
+    {
+        if( i_data <= 1U || i_data <= 1U + p_data[0] )
+            goto end;
+        i_data -= 1 + p_data[0];
+        p_data += 1 + p_data[0];
+    }
+
+    /* text... finally */
+    if( i_data < 1U || i_data < 1U + p_data[0] )
+        goto end;
+    if( !p_fmt->psz_description )
+        p_fmt->psz_description = strndup( (const char*) &p_data[1], p_data[0] );
+
+end:
+    /* Apply */
+    for( size_t i=0; i<ARRAY_SIZE(subtitle_purpose); i++ )
+    {
+        if( subtitle_purpose[i].val == (p_dr->p_data[4] >> 2) )
+        {
+            if( !p_fmt->psz_description )
+                p_fmt->psz_description = strdup( subtitle_purpose[i].psz );
+            break;
+        }
     }
 }
 
@@ -695,11 +773,11 @@ typedef struct
 
 static const char *const ppsz_teletext_type[] = {
  "",
- N_("Teletext"),
- N_("Teletext subtitles"),
- N_("Teletext: additional information"),
- N_("Teletext: program schedule"),
- N_("Teletext subtitles: hearing impaired")
+ DESC_TELETEXT,
+ DESC_TELETEXT_SUBTITLES,
+ DESC_TELETEXT_ADDTNL_INFO,
+ DESC_TELETEXT_SCHEDULE,
+ DESC_TELETEXT_SUBS_HEARING_IMPAIRED
 };
 
 static void PMTSetupEsTeletext( demux_t *p_demux, ts_stream_t *p_pes,
@@ -779,7 +857,7 @@ static void PMTSetupEsTeletext( demux_t *p_demux, ts_stream_t *p_pes,
 
     if( !p_sys->b_split_es || i_page <= 0 )
     {
-        p_fmt->subs.teletext.i_magazine = -1;
+        p_fmt->subs.teletext.i_magazine = 255;
         p_fmt->subs.teletext.i_page = 0;
         p_fmt->psz_description = strdup( vlc_gettext(ppsz_teletext_type[1]) );
 
@@ -800,43 +878,66 @@ static void PMTSetupEsTeletext( demux_t *p_demux, ts_stream_t *p_pes,
     }
     else
     {
-        for( unsigned i = 0; i < i_page; i++ )
+        ts_es_t *p_page_es = p_pes->p_es;
+        enum txt_pass_s
         {
-            ts_es_t *p_page_es;
+            TXT_SUBTITLES = 0,
+            TXT_INDEX_PAGE,
+            TXT_OTHER,
+        };
+        for( enum txt_pass_s pass = TXT_SUBTITLES; pass <= TXT_OTHER; pass++ )
+        {
+            for( unsigned i = 0; i < i_page; i++ )
+            {
+                const ts_teletext_page_t *p = &p_page[i];
+                switch(p->i_type)
+                {
+                    case 0x01:
+                        if(pass != TXT_INDEX_PAGE)
+                            continue;
+                        break;
+                    case 0x02:
+                    case 0x05:
+                        if(pass != TXT_SUBTITLES)
+                            continue;
+                        break;
+                    default:
+                        if(pass != TXT_OTHER)
+                            continue;
+                        break;
+                }
 
-            /* */
-            if( i == 0 )
-            {
-                p_page_es = p_pes->p_es;
-            }
-            else
-            {
-                p_page_es = ts_es_New( p_pes->p_es->p_program );
+                /* */
                 if( !p_page_es )
-                    break;
+                {
+                    p_page_es = ts_es_New( p_pes->p_es->p_program );
+                    if( !p_page_es )
+                        break;
 
-                es_format_Copy( &p_page_es->fmt, p_fmt );
-                free( p_page_es->fmt.psz_language );
-                free( p_page_es->fmt.psz_description );
-                p_page_es->fmt.psz_language = NULL;
-                p_page_es->fmt.psz_description = NULL;
-                ts_stream_Add_es( p_pes, p_page_es, true );
+                    es_format_Copy( &p_page_es->fmt, p_fmt );
+                    free( p_page_es->fmt.psz_language );
+                    free( p_page_es->fmt.psz_description );
+                    p_page_es->fmt.psz_language = NULL;
+                    p_page_es->fmt.psz_description = NULL;
+                    ts_stream_Add_es( p_pes, p_page_es, true );
+                }
+
+                /* */
+                p_page_es->fmt.i_priority = (pass == TXT_SUBTITLES) ?
+                          ES_PRIORITY_SELECTABLE_MIN : ES_PRIORITY_NOT_DEFAULTABLE;
+                p_page_es->fmt.psz_language = strndup( p->p_iso639, 3 );
+                p_page_es->fmt.psz_description = strdup(vlc_gettext(ppsz_teletext_type[p->i_type]));
+                p_page_es->fmt.subs.teletext.i_magazine = p->i_magazine;
+                p_page_es->fmt.subs.teletext.i_page = p->i_page;
+
+                msg_Dbg( p_demux,
+                             "    * ttxt type=%s lan=%s page=%d%02x",
+                             p_page_es->fmt.psz_description,
+                             p_page_es->fmt.psz_language,
+                             p->i_magazine, p->i_page );
+
+                p_page_es = NULL; /* used */
             }
-
-            /* */
-            const ts_teletext_page_t *p = &p_page[i];
-            p_page_es->fmt.i_priority = (p->i_type == 0x02 || p->i_type == 0x05) ?
-                      ES_PRIORITY_SELECTABLE_MIN : ES_PRIORITY_NOT_DEFAULTABLE;
-            p_page_es->fmt.psz_language = strndup( p->p_iso639, 3 );
-            p_page_es->fmt.psz_description = strdup(vlc_gettext(ppsz_teletext_type[p->i_type]));
-            p_page_es->fmt.subs.teletext.i_magazine = p->i_magazine;
-            p_page_es->fmt.subs.teletext.i_page = p->i_page;
-
-            msg_Dbg( p_demux,
-                         "    * ttxt type=%s lan=%s page=%d%02x",
-                         p_page_es->fmt.psz_description,
-                         p_page_es->fmt.psz_language,
-                         p->i_magazine, p->i_page );
         }
     }
 }
@@ -1114,8 +1215,9 @@ static void PMTSetupEs0x05PrivateData( demux_t *p_demux, ts_es_t *p_es,
             for( uint8_t i_data = p_ait_dr->i_length; i_data >= 3; i_data -= 3, p_data += 3 )
             {
                 uint16_t i_app_type = ((p_data[0] & 0x7F) << 8) | p_data[1];
+                uint8_t i_version   = p_data[2] & 0x1F;
                 msg_Dbg( p_demux, "      - Application type 0x%"PRIx16" version %"PRIu8,
-                         i_app_type, p_data[2] & 0x1F);
+                         i_app_type, i_version);
             }
         }
     }
@@ -1178,8 +1280,12 @@ static void PMTSetupEs0x06( demux_t *p_demux, ts_stream_t *p_pes,
             case 0x0F: /* DTS Neural */
                 es_format_Change( p_fmt, AUDIO_ES, VLC_CODEC_DTS );
                 break;
-            case 0x15: /* AC4, unsupported for now */
-                es_format_Change( p_fmt, AUDIO_ES, VLC_FOURCC('A', 'C', '-', '4') );
+            case 0x15: /* Dolby AC-4 */
+                es_format_Change( p_fmt, AUDIO_ES, VLC_CODEC_AC4 );
+                break;
+            case 0x20:
+                es_format_Change( p_fmt, SPU_ES, VLC_CODEC_TTML_TS );
+                SetupTTMLExtendedDescriptor( p_demux, desc, p_fmt );
                 break;
         }
     }
@@ -1388,7 +1494,8 @@ static bool PMTSetupEsHDMV( demux_t *p_demux, ts_es_t *p_es,
         es_format_Change( p_fmt, SPU_ES, VLC_CODEC_BD_PG );
         break;
     case 0x91: /* Interactive graphics */
-        return false;
+        es_format_Change( p_fmt, UNKNOWN_ES, 0 ); /* prevent regular ES handler */
+        break;
     case 0x92: /* Subtitle */
         es_format_Change( p_fmt, SPU_ES, VLC_CODEC_BD_TEXT );
         break;
@@ -1467,7 +1574,10 @@ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
         break;
     case 0x11:  /* MPEG4 (audio) LATM */
         es_format_Change( fmt, AUDIO_ES, VLC_CODEC_MP4A );
-        fmt->i_original_fourcc = VLC_FOURCC('L','A','T','M');
+        /* https://trac.ffmpeg.org/ticket/320
+         * Haivision's Makito encoder violates mapping by putting ADTS
+           instead of LOAS, we can only hint that's not raw AAC */
+        fmt->i_original_fourcc = VLC_FOURCC('H','E','A','D');
         break;
     case 0x1B:  /* H264 <- check transport syntax/needed descriptor */
         es_format_Change( fmt, VIDEO_ES, VLC_CODEC_H264 );
@@ -1961,10 +2071,18 @@ static void PMTCallBack( void *data, dvbpsi_pmt_t *p_dvbpsipmt )
                                     (void *)p_en ) != VLC_SUCCESS )
             {
                 en50221_capmt_Delete( p_en );
-                if ( p_sys->standard == TS_STANDARD_ARIB && !p_sys->arib.b25stream )
+                if ( p_sys->standard == TS_STANDARD_ARIB && p_sys->stream == p_demux->s )
                 {
-                    p_sys->arib.b25stream = vlc_stream_FilterNew( p_demux->s, "aribcam" );
-                    p_sys->stream = ( p_sys->arib.b25stream ) ? p_sys->arib.b25stream : p_demux->s;
+                    stream_t *wrapper = ts_stream_wrapper_New( p_demux->s );
+                    if( wrapper )
+                    {
+                        p_sys->stream = vlc_stream_FilterNew( wrapper, "aribcam" );
+                        if( !p_sys->stream )
+                        {
+                            vlc_stream_Delete( wrapper );
+                            p_sys->stream = p_demux->s;
+                        }
+                    }
                 }
             }
         }
@@ -2062,7 +2180,7 @@ static void PMTCallBack( void *data, dvbpsi_pmt_t *p_dvbpsipmt )
     UpdatePESFilters( p_demux, p_sys->seltype == PROGRAM_ALL );
 
     /* Probe Boundaries */
-    if( p_sys->b_canfastseek && p_pmt->i_last_dts == -1 )
+    if( p_sys->b_canfastseek && p_pmt->i_last_dts == TS_TICK_UNKNOWN )
     {
         p_pmt->i_last_dts = 0;
         ProbeStart( p_demux, p_pmt->i_number );

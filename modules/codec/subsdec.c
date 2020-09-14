@@ -2,7 +2,6 @@
  * subsdec.c : text subtitle decoder
  *****************************************************************************
  * Copyright (C) 2000-2006 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Gildas Bazin <gbazin@videolan.org>
  *          Samuel Hocevar <sam@zoy.org>
@@ -162,9 +161,10 @@ static const char *const ppsz_encoding_names[] = {
     N_("Vietnamese (Windows-1258)"),
 };
 
-static const int  pi_justification[] = { 0, 1, 2 };
+static const int  pi_justification[] = { -1, 0, 1, 2 };
 static const char *const ppsz_justification_text[] = {
-    N_("Center"),N_("Left"),N_("Right")};
+    N_("Auto"),N_("Center"),N_("Left"),N_("Right")
+};
 
 #define ENCODING_TEXT N_("Subtitle text encoding")
 #define ENCODING_LONGTEXT N_("Set the encoding used in text subtitles")
@@ -185,7 +185,7 @@ vlc_module_begin ()
     set_category( CAT_INPUT )
     set_subcategory( SUBCAT_INPUT_SCODEC )
 
-    add_integer( "subsdec-align", 0, ALIGN_TEXT, ALIGN_LONGTEXT,
+    add_integer( "subsdec-align", -1, ALIGN_TEXT, ALIGN_LONGTEXT,
                  false )
         change_integer_list( pi_justification, ppsz_justification_text )
     add_string( "subsdec-encoding", "",
@@ -242,7 +242,7 @@ static int OpenDecoder( vlc_object_t *p_this )
     p_dec->fmt_out.i_codec = 0;
 
     /* init of p_sys */
-    p_sys->i_align = 0;
+    p_sys->i_align = -1;
     p_sys->iconv_handle = (vlc_iconv_t)-1;
     p_sys->b_autodetect_utf8 = false;
 
@@ -456,16 +456,29 @@ static subpicture_t *ParseText( decoder_t *p_dec, block_t *p_block )
     }
     p_spu->i_start    = p_block->i_pts;
     p_spu->i_stop     = p_block->i_pts + p_block->i_length;
-    p_spu->b_ephemer  = (p_block->i_length == 0);
+    p_spu->b_ephemer  = (p_block->i_length == VLC_TICK_INVALID);
     p_spu->b_absolute = false;
 
     subtext_updater_sys_t *p_spu_sys = p_spu->updater.p_sys;
 
-    p_spu_sys->region.align = SUBPICTURE_ALIGN_BOTTOM | p_sys->i_align;
-    p_spu_sys->region.inner_align = SUBPICTURE_ALIGN_BOTTOM;
-    p_spu_sys->region.p_segments = ParseSubtitles( &p_spu_sys->region.align, psz_subtitle );
-
+    int i_inline_align = -1;
+    p_spu_sys->region.p_segments = ParseSubtitles( &i_inline_align, psz_subtitle );
     free( psz_subtitle );
+    if( p_sys->i_align >= 0 ) /* bottom ; left, right or centered */
+    {
+        p_spu_sys->region.align = SUBPICTURE_ALIGN_BOTTOM | p_sys->i_align;
+        p_spu_sys->region.inner_align = p_sys->i_align;
+    }
+    else if( i_inline_align >= 0 )
+    {
+        p_spu_sys->region.align = i_inline_align;
+        p_spu_sys->region.inner_align = i_inline_align;
+    }
+    else /* default, bottom ; centered */
+    {
+        p_spu_sys->region.align = SUBPICTURE_ALIGN_BOTTOM;
+        p_spu_sys->region.inner_align = 0;
+    }
 
     return p_spu;
 }
@@ -738,7 +751,7 @@ static text_segment_t* ParseSubtitles( int *pi_align, const char *psz_subtitle )
     //FIXME: Remove initial allocation? Might make the below code more complicated
     p_first_segment = p_segment = text_segment_New( "" );
 
-    bool b_has_align = false;
+    *pi_align = -1;
 
     /* */
     while( *psz_subtitle )
@@ -884,14 +897,14 @@ static text_segment_t* ParseSubtitles( int *pi_align, const char *psz_subtitle )
             }
             else if( !strncmp( psz_subtitle, "</", 2 ))
             {
-                char* psz_tagname = GetTag( &psz_subtitle, true );
-                if ( psz_tagname != NULL )
+                char* psz_closetagname = GetTag( &psz_subtitle, true );
+                if ( psz_closetagname != NULL )
                 {
-                    if ( !strcasecmp( psz_tagname, "b" ) ||
-                         !strcasecmp( psz_tagname, "i" ) ||
-                         !strcasecmp( psz_tagname, "u" ) ||
-                         !strcasecmp( psz_tagname, "s" ) ||
-                         !strcasecmp( psz_tagname, "font" ) )
+                    if ( !strcasecmp( psz_closetagname, "b" ) ||
+                         !strcasecmp( psz_closetagname, "i" ) ||
+                         !strcasecmp( psz_closetagname, "u" ) ||
+                         !strcasecmp( psz_closetagname, "s" ) ||
+                         !strcasecmp( psz_closetagname, "font" ) )
                     {
                         // A closing tag for one of the tags we handle, meaning
                         // we pushed a style onto the stack earlier
@@ -900,10 +913,10 @@ static text_segment_t* ParseSubtitles( int *pi_align, const char *psz_subtitle )
                     else
                     {
                         // Unknown closing tag. If it is closing an unknown tag, ignore it. Otherwise, display it
-                        if ( !HasTag( &p_tag_stack, psz_tagname ) )
+                        if ( !HasTag( &p_tag_stack, psz_closetagname ) )
                         {
                             AppendString( p_segment, "</" );
-                            AppendString( p_segment, psz_tagname );
+                            AppendString( p_segment, psz_closetagname );
                             AppendCharacter( p_segment, '>' );
                         }
                     }
@@ -911,7 +924,7 @@ static text_segment_t* ParseSubtitles( int *pi_align, const char *psz_subtitle )
                         psz_subtitle++;
                     if ( *psz_subtitle == '>' )
                         psz_subtitle++;
-                    free( psz_tagname );
+                    free( psz_closetagname );
                 }
                 else
                 {
@@ -938,14 +951,13 @@ static text_segment_t* ParseSubtitles( int *pi_align, const char *psz_subtitle )
                  strchr( psz_subtitle, '}' ) )
         {
             /* Check for forced alignment */
-            if( !b_has_align &&
+            if( *pi_align < 0 &&
                 !strncmp( psz_subtitle, "{\\an", 4 ) && psz_subtitle[4] >= '1' && psz_subtitle[4] <= '9' && psz_subtitle[5] == '}' )
             {
                 static const int pi_vertical[3] = { SUBPICTURE_ALIGN_BOTTOM, 0, SUBPICTURE_ALIGN_TOP };
                 static const int pi_horizontal[3] = { SUBPICTURE_ALIGN_LEFT, 0, SUBPICTURE_ALIGN_RIGHT };
                 const int i_id = psz_subtitle[4] - '1';
 
-                b_has_align = true;
                 *pi_align = pi_vertical[i_id/3] | pi_horizontal[i_id%3];
             }
             /* TODO fr -> rotation */

@@ -198,6 +198,7 @@ static void PlaneYUY2_##f(plane_t *restrict dst, const plane_t *restrict src) \
     } \
 }
 
+#undef PLANES // already exists on Windows
 #define PLANES(f) \
 PLANE(f,8) PLANE(f,16) PLANE(f,32)
 
@@ -288,14 +289,13 @@ static picture_t *Filter(filter_t *filter, picture_t *src)
 }
 
 static int Mouse(filter_t *filter, vlc_mouse_t *mouse,
-                 const vlc_mouse_t *mold, const vlc_mouse_t *mnew)
+                 const vlc_mouse_t *mold)
 {
     VLC_UNUSED( mold );
 
     const video_format_t *fmt = &filter->fmt_out.video;
     const filter_sys_t   *sys = filter->p_sys;
 
-    *mouse = *mnew;
     sys->convert(&mouse->i_x, &mouse->i_y,
                  fmt->i_visible_width, fmt->i_visible_height,
                  mouse->i_x, mouse->i_y);

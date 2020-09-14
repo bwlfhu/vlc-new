@@ -5,7 +5,7 @@ liblua_plugin_la_SOURCES = \
 	lua/extension_thread.c \
 	lua/intf.c \
 	lua/meta.c \
-	lua/demux.c \
+	lua/stream_filter.c \
 	lua/services_discovery.c \
 	lua/vlc.c lua/vlc.h \
 	lua/libs.h \
@@ -18,7 +18,7 @@ liblua_plugin_la_SOURCES = \
 	lua/libs/messages.c \
 	lua/libs/misc.c lua/libs/misc.h \
 	lua/libs/net.c \
-	lua/libs/objects.c lua/libs/objects.h \
+	lua/libs/objects.c \
 	lua/libs/osd.c \
 	lua/libs/playlist.c \
 	lua/libs/sd.c \
@@ -31,7 +31,8 @@ liblua_plugin_la_SOURCES = \
 	lua/libs/xml.c \
 	lua/libs/io.c \
 	lua/libs/errno.c \
-	lua/libs/rand.c
+	lua/libs/rand.c \
+	lua/libs/renderers.c
 
 if HAVE_WIN32
 liblua_plugin_la_SOURCES += lua/libs/win.c

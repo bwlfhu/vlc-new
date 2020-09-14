@@ -2,7 +2,6 @@
  * tospdif.c : encapsulates A/52 and DTS frames into S/PDIF packets
  *****************************************************************************
  * Copyright (C) 2002, 2006-2016 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Christophe Massiot <massiot@via.ecp.fr>
  *          Stéphane Borel <stef@via.ecp.fr>
@@ -37,8 +36,8 @@
 #include <vlc_aout.h>
 #include <vlc_filter.h>
 
-#include "../packetizer/a52.h"
-#include "../packetizer/dts_header.h"
+#include "../../packetizer/a52.h"
+#include "../../packetizer/dts_header.h"
 
 static int  Open( vlc_object_t * );
 static void Close( vlc_object_t * );
@@ -97,6 +96,7 @@ static bool is_big_endian( filter_t *p_filter, block_t *p_in_buf )
         case VLC_CODEC_TRUEHD:
             return true;
         case VLC_CODEC_DTS:
+        case VLC_CODEC_DTSHD:
             return p_in_buf->p_buffer[0] == 0x1F
                 || p_in_buf->p_buffer[0] == 0x7F;
         default:
@@ -220,7 +220,7 @@ static int write_buffer_ac3( filter_t *p_filter, block_t *p_in_buf )
     static const size_t a52_size = A52_FRAME_NB * 4;
 
     if( unlikely( p_in_buf->i_buffer < 6
-     || p_in_buf->i_buffer > a52_size
+     || p_in_buf->i_buffer + SPDIF_HEADER_SIZE > a52_size
      || p_in_buf->i_nb_samples != A52_FRAME_NB ) )
     {
         /* Input is not correctly packetizer. Try to parse the buffer in order
@@ -280,7 +280,7 @@ static int write_buffer_eac3( filter_t *p_filter, block_t *p_in_buf )
 
         if( vlc_a52_header_Parse( &a52_dep, dep_buf, dep_size ) != VLC_SUCCESS
          || a52_dep.i_size > dep_size
-         || !a52_dep.b_eac3 || a52_dep.eac3.strmtyp != EAC3_STRMTYP_DEPENDENT
+         || !a52_dep.b_eac3 || a52_dep.bs.eac3.strmtyp != EAC3_STRMTYP_DEPENDENT
          || p_in_buf->i_buffer > a52.i_size + a52_dep.i_size )
             return SPDIF_ERROR;
     }
@@ -415,7 +415,8 @@ static int write_buffer_dts( filter_t *p_filter, block_t *p_in_buf )
         return SPDIF_ERROR;
     }
 
-    if( core.b_14b )
+    if( core.syncword == DTS_SYNC_CORE_14BITS_BE ||
+        core.syncword == DTS_SYNC_CORE_14BITS_LE )
     {
         if( p_in_buf->i_buffer > p_in_buf->i_nb_samples * 4 )
             return SPDIF_ERROR;
@@ -518,9 +519,8 @@ static int write_buffer_dtshd( filter_t *p_filter, block_t *p_in_buf )
 
     /* Align so that (length_code & 0xf) == 0x8. This is reportedly needed
      * with some receivers, but the exact requirement is unconfirmed. */
-#define ALIGN(x, y) (((x) + ((y) - 1)) & ~((y) - 1))
-    size_t i_align = ALIGN( i_in_size + 0x8, 0x10 ) - 0x8;
-#undef ALIGN
+    size_t i_align = vlc_align( i_in_size + 0x8, 0x10 ) - 0x8;
+
     if( i_align > i_in_size && i_align - i_in_size
         <= p_sys->p_out_buf->i_buffer - p_sys->i_out_offset )
         write_padding( p_filter, i_align - i_in_size );
@@ -569,14 +569,11 @@ static block_t *DoWork( filter_t *p_filter, block_t *p_in_buf )
         case VLC_CODEC_TRUEHD:
             i_ret = write_buffer_truehd( p_filter, p_in_buf );
             break;
+        case VLC_CODEC_DTSHD:
+            i_ret = write_buffer_dtshd( p_filter, p_in_buf );
+            break;
         case VLC_CODEC_DTS:
-            /* if the fmt_out is configured for a higher rate than 48kHz
-             * (IEC958 rate), use the DTS-HD framing to pass the DTS Core and
-             * or DTS substreams (like DTS-HD MA). */
-            if( p_filter->fmt_out.audio.i_rate > 48000 )
-                i_ret = write_buffer_dtshd( p_filter, p_in_buf );
-            else
-                i_ret = write_buffer_dts( p_filter, p_in_buf );
+            i_ret = write_buffer_dts( p_filter, p_in_buf );
             break;
         default:
             vlc_assert_unreachable();
@@ -606,6 +603,7 @@ static int Open( vlc_object_t *p_this )
     filter_sys_t *p_sys;
 
     if( ( p_filter->fmt_in.audio.i_format != VLC_CODEC_DTS &&
+          p_filter->fmt_in.audio.i_format != VLC_CODEC_DTSHD &&
           p_filter->fmt_in.audio.i_format != VLC_CODEC_A52 &&
           p_filter->fmt_in.audio.i_format != VLC_CODEC_EAC3 &&
           p_filter->fmt_in.audio.i_format != VLC_CODEC_MLP &&

@@ -32,8 +32,10 @@
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_tls.h>
+#include <vlc_threads.h>
 #include <vlc_interrupt.h>
 #include <vlc_httpd.h>
+#include <vlc_cxx_helpers.hpp>
 
 #include <atomic>
 #include <sstream>
@@ -97,7 +99,9 @@ enum States
 class ChromecastCommunication
 {
 public:
-    ChromecastCommunication( vlc_object_t* module, const char* targetIP, unsigned int devicePort );
+    ChromecastCommunication( vlc_object_t* module,
+                             std::string serverPath, unsigned int serverPort,
+                             const char* targetIP, unsigned int devicePort );
     ~ChromecastCommunication();
     /**
      * @brief disconnect close the connection with the chromecast
@@ -117,7 +121,7 @@ public:
     unsigned msgReceiverGetStatus();
     unsigned msgReceiverClose(const std::string& destinationId);
     unsigned msgAuth();
-    unsigned msgPlayerLoad( const std::string& destinationId, unsigned int i_port,
+    unsigned msgPlayerLoad( const std::string& destinationId,
                             const std::string& mime, const vlc_meta_t *p_meta );
     unsigned msgPlayerPlay( const std::string& destinationId, int64_t mediaSessionId );
     unsigned msgPlayerStop( const std::string& destinationId, int64_t mediaSessionId );
@@ -141,18 +145,19 @@ private:
                      const std::string & destinationId = DEFAULT_CHOMECAST_RECEIVER,
                      castchannel::CastMessage_PayloadType payloadType = castchannel::CastMessage_PayloadType_STRING);
     int pushMediaPlayerMessage( const std::string& destinationId, const std::stringstream & payload );
-    std::string GetMedia( unsigned int i_port, const std::string& mime,
-                          const vlc_meta_t *p_meta );
+    std::string GetMedia( const std::string& mime, const vlc_meta_t *p_meta );
     unsigned getNextReceiverRequestId();
     unsigned getNextRequestId();
 
 private:
     vlc_object_t* m_module;
-    vlc_tls_creds_t *m_creds;
+    vlc_tls_client_t *m_creds;
     vlc_tls_t *m_tls;
     unsigned m_receiver_requestId;
     unsigned m_requestId;
     std::string m_serverIp;
+    const std::string m_serverPath;
+    const unsigned m_serverPort;
 };
 
 /*****************************************************************************
@@ -182,6 +187,10 @@ struct intf_sys_t
     void sendInputEvent(enum cc_input_event event, union cc_input_arg arg);
     vlc_tick_t getPauseDelay();
 
+    unsigned int getHttpStreamPort() const;
+    std::string getHttpStreamPath() const;
+    std::string getHttpArtRoot() const;
+
     int httpd_file_fill( uint8_t *psz_request, uint8_t **pp_data, int *pi_data );
     void interrupt_wake_up();
 private:
@@ -191,7 +200,7 @@ private:
     bool processMessage(const castchannel::CastMessage &msg);
     void queueMessage( QueueableMessages msg );
 
-    void setPauseState(bool paused, vlc_tick_t delay);
+    void setPauseState(bool paused);
     bool isFinishedPlaying();
     bool isStateError() const;
     bool isStatePlaying() const;
@@ -226,7 +235,7 @@ private:
     static void send_input_event(void *, enum cc_input_event event, union cc_input_arg arg);
     static void set_demux_enabled(void *, bool, on_paused_changed_itf, void *);
 
-    static void set_pause_state(void*, bool paused, vlc_tick_t delay);
+    static void set_pause_state(void*, bool paused);
 
     static void set_meta(void*, vlc_meta_t *p_meta);
 
@@ -237,7 +246,6 @@ private:
 
 private:
     vlc_object_t  * const m_module;
-    const int      m_streaming_port;
     const int      m_device_port;
     std::string    m_mime;
     std::string    m_device_addr;
@@ -246,9 +254,9 @@ private:
     unsigned m_last_request_id;
     int64_t m_mediaSessionId;
 
-    mutable vlc_mutex_t  m_lock;
-    vlc_cond_t   m_stateChangedCond;
-    vlc_cond_t   m_pace_cond;
+    mutable vlc::threads::mutex  m_lock;
+    vlc::threads::condition_variable m_stateChangedCond;
+    vlc::threads::condition_variable m_pace_cond;
     vlc_thread_t m_chromecastThread;
 
     on_input_event_itf    m_on_input_event;
@@ -262,6 +270,7 @@ private:
     States m_state;
     bool m_retry_on_fail;
     bool m_played_once;
+    bool m_paused_once;
     bool m_request_stop;
     bool m_request_load;
     bool m_paused;
@@ -274,7 +283,16 @@ private:
 
     vlc_interrupt_t *m_ctl_thread_interrupt;
 
-    httpd_host_t     *m_httpd_host;
+    struct httpd_info_t {
+        httpd_info_t( httpd_host_t* host, int port );
+        ~httpd_info_t();
+
+        httpd_host_t *m_host;
+        int           m_port;
+        httpd_url_t  *m_url;
+        std::string   m_root;
+    } const m_httpd;
+
     httpd_file_t     *m_httpd_file;
     std::string       m_art_http_ip;
     char             *m_art_url;
@@ -283,7 +301,6 @@ private:
     vlc_tick_t        m_cc_time_last_request_date;
     vlc_tick_t        m_cc_time_date;
     vlc_tick_t        m_cc_time;
-    vlc_tick_t        m_pause_delay;
 
     /* shared structure with the demux-filter */
     chromecast_common      m_common;

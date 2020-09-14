@@ -2,7 +2,6 @@
  * folder.c
  *****************************************************************************
  * Copyright (C) 2006 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Antoine Cellerier <dionoea -at- videolan -dot- org>
  *
@@ -70,7 +69,7 @@ vlc_module_begin ()
     add_loadfile("album-art-filename", NULL, N_("Album art filename"),
                  N_("Filename to look for album art in current directory"))
     set_capability( "art finder", 90 )
-    set_callbacks( FindMeta, NULL )
+    set_callback( FindMeta )
 vlc_module_end ()
 
 static bool ProbeArtFile(input_item_t *item,

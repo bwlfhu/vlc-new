@@ -3,7 +3,6 @@
  *****************************************************************************
  * Copyright (C) 1999-2004 VLC authors and VideoLAN
  * Copyright 2008-2015 Rémi Denis-Courmont
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *
@@ -85,7 +84,7 @@ stream_t *vlc_stream_CustomNew(vlc_object_t *parent,
     s->pf_seek = NULL;
     s->pf_control = NULL;
     s->p_sys = NULL;
-    s->p_input = NULL;
+    s->p_input_item = NULL;
     assert(destroy != NULL);
     priv->destroy = destroy;
     priv->block = NULL;
@@ -125,7 +124,7 @@ void stream_CommonDelete(stream_t *s)
         block_Release(priv->block);
 
     free(s->psz_url);
-    vlc_object_release(s);
+    vlc_object_delete(s);
 }
 
 /**

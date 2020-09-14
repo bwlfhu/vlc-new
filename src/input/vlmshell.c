@@ -2,7 +2,6 @@
  * vlmshell.c: VLM interface plugin
  *****************************************************************************
  * Copyright (C) 2000-2005 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Simon Latapie <garf@videolan.org>
  *          Laurent Aimar <fenrir@videolan.org>
@@ -45,7 +44,6 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
-#include <vlc_input.h>
 #include "input_internal.h"
 #include <vlc_stream.h>
 #include "vlm_internal.h"
@@ -308,7 +306,7 @@ static int ExecuteHelp( vlm_message_t **pp_status )
     *pp_status = vlm_MessageSimpleNew( "help" );
 
     message_child = MessageAdd( "Commands Syntax:" );
-    MessageAddChild( "new (name) vod|broadcast|schedule [properties]" );
+    MessageAddChild( "new (name) broadcast|schedule [properties]" );
     MessageAddChild( "setup (name) (properties)" );
     MessageAddChild( "show [(name)|media|schedule]" );
     MessageAddChild( "del (name)|all|media|schedule" );
@@ -324,8 +322,7 @@ static int ExecuteHelp( vlm_message_t **pp_status )
     MessageAddChild( "output (output_name)" );
     MessageAddChild( "option (option_name)[=value]" );
     MessageAddChild( "enabled|disabled" );
-    MessageAddChild( "loop|unloop (broadcast only)" );
-    MessageAddChild( "mux (mux_name)" );
+    MessageAddChild( "loop|unloop" );
 
     message_child = MessageAdd( "Schedule Proprieties Syntax:" );
     MessageAddChild( "enabled|disabled" );
@@ -404,10 +401,7 @@ static int ExecuteControl( vlm_t *p_vlm, const char *psz_name, const int i_arg, 
             }
         }
 
-        if( p_media->cfg.b_vod )
-            i_result = vlm_ControlInternal( p_vlm, VLM_START_MEDIA_VOD_INSTANCE, p_media->cfg.id, psz_instance, i_input_index, NULL );    // we should get here now
-        else
-            i_result = vlm_ControlInternal( p_vlm, VLM_START_MEDIA_BROADCAST_INSTANCE, p_media->cfg.id, psz_instance, i_input_index );
+        i_result = vlm_ControlInternal( p_vlm, VLM_START_MEDIA_BROADCAST_INSTANCE, p_media->cfg.id, psz_instance, i_input_index );
     }
     else if( !strcmp( psz_control, "seek" ) )
     {
@@ -425,9 +419,9 @@ static int ExecuteControl( vlm_t *p_vlm, const char *psz_name, const int i_arg, 
                 int64_t i_new_time;
 
                 if( strstr( psz_argument, "ms" ) )
-                    i_new_time =  1000 * (int64_t)atoi( psz_argument );
+                    i_new_time = INT64_C(1000) * atoi( psz_argument );
                 else
-                    i_new_time = vlc_tick_from_sec(atoi( psz_argument ));
+                    i_new_time = INT64_C(1000000) * atoi( psz_argument );
 
                 if( b_relative )
                 {
@@ -732,25 +726,11 @@ static int ExecuteMediaProperty( vlm_t *p_vlm, int64_t id, bool b_new,
         }
         else if( !strcmp( psz_option, "loop" ) )
         {
-            if( p_cfg->b_vod )
-                ERROR( "invalid loop option for vod" );
             p_cfg->broadcast.b_loop = true;
         }
         else if( !strcmp( psz_option, "unloop" ) )
         {
-            if( p_cfg->b_vod )
-                ERROR( "invalid unloop option for vod" );
             p_cfg->broadcast.b_loop = false;
-        }
-        else if( !strcmp( psz_option, "mux" ) )
-        {
-            MISSING( "mux" );
-            if( !p_cfg->b_vod )
-                ERROR( "invalid mux option for broadcast" );
-
-            free( p_cfg->vod.psz_mux );
-            p_cfg->vod.psz_mux = *psz_value ? strdup( psz_value ) : NULL;
-            i++;
         }
         else
         {
@@ -802,14 +782,13 @@ static int ExecuteNew( vlm_t *p_vlm, const char *psz_name, const char *psz_type,
         }
         return ExecuteScheduleProperty( p_vlm, p_schedule, true, i_property, ppsz_property, pp_status );
     }
-    else if( !strcmp( psz_type, "vod" ) || !strcmp( psz_type, "broadcast" ) )
+    else if( !strcmp( psz_type, "broadcast" ) )
     {
         vlm_media_t cfg;
         int64_t id;
 
         vlm_media_Init( &cfg );
         cfg.psz_name = strdup( psz_name );
-        cfg.b_vod = !strcmp( psz_type, "vod" );
 
         if( vlm_ControlInternal( p_vlm, VLM_ADD_MEDIA, &cfg, &id ) )
         {
@@ -822,7 +801,7 @@ static int ExecuteNew( vlm_t *p_vlm, const char *psz_name, const char *psz_type,
     }
     else
     {
-        *pp_status = vlm_MessageNew( "new", "%s: Choose between vod, broadcast or schedule", psz_type );
+        *pp_status = vlm_MessageNew( "new", "%s: Choose between broadcast or schedule", psz_type );
         return VLC_EGENERIC;
     }
 }
@@ -1291,16 +1270,12 @@ static vlm_message_t *vlm_ShowMedia( vlm_media_sys_t *p_media )
 
     p_msg = vlm_MessageSimpleNew( p_cfg->psz_name );
     vlm_MessageAdd( p_msg,
-                    vlm_MessageNew( "type", p_cfg->b_vod ? "vod" : "broadcast" ) );
+                    vlm_MessageNew( "type", "broadcast" ) );
     vlm_MessageAdd( p_msg,
                     vlm_MessageNew( "enabled", p_cfg->b_enabled ? "yes" : "no" ) );
 
-    if( p_cfg->b_vod )
-        vlm_MessageAdd( p_msg,
-                        vlm_MessageNew( "mux", "%s", p_cfg->vod.psz_mux ) );
-    else
-        vlm_MessageAdd( p_msg,
-                        vlm_MessageNew( "loop", p_cfg->broadcast.b_loop ? "yes" : "no" ) );
+    vlm_MessageAdd( p_msg,
+                    vlm_MessageNew( "loop", p_cfg->broadcast.b_loop ? "yes" : "no" ) );
 
     p_msg_sub = vlm_MessageAdd( p_msg, vlm_MessageSimpleNew( "inputs" ) );
     for( i = 0; i < p_cfg->i_input; i++ )
@@ -1325,12 +1300,18 @@ static vlm_message_t *vlm_ShowMedia( vlm_media_sys_t *p_media )
     for( i = 0; i < p_media->i_instance; i++ )
     {
         vlm_media_instance_sys_t *p_instance = p_media->instance[i];
-        vlc_value_t val;
         vlm_message_t *p_msg_instance;
 
-        val.i_int = END_S;
-        if( p_instance->p_input )
-            var_Get( p_instance->p_input, "state", &val );
+        vlc_player_Lock(p_instance->player);
+        enum vlc_player_state state = vlc_player_GetState(p_instance->player);
+        float position = vlc_player_GetPosition(p_instance->player);
+        vlc_tick_t time = vlc_player_GetTime(p_instance->player);
+        vlc_tick_t length = vlc_player_GetLength(p_instance->player);
+        float rate = vlc_player_GetRate(p_instance->player);
+        ssize_t title = vlc_player_GetSelectedTitleIdx(p_instance->player);
+        ssize_t chapter = vlc_player_GetSelectedChapterIdx(p_instance->player);
+        bool can_seek = vlc_player_CanSeek(p_instance->player);
+        vlc_player_Unlock(p_instance->player);
 
         p_msg_instance = vlm_MessageAdd( p_msg_sub, vlm_MessageSimpleNew( "instance" ) );
 
@@ -1338,24 +1319,20 @@ static vlm_message_t *vlm_ShowMedia( vlm_media_sys_t *p_media )
                         vlm_MessageNew( "name" , "%s", p_instance->psz_name ? p_instance->psz_name : "default" ) );
         vlm_MessageAdd( p_msg_instance,
                         vlm_MessageNew( "state",
-                            val.i_int == PLAYING_S ? "playing" :
-                            val.i_int == PAUSE_S ? "paused" :
+                            state == VLC_PLAYER_STATE_PLAYING ? "playing" :
+                            state == VLC_PLAYER_STATE_PAUSED ? "paused" :
                             "stopped" ) );
 
         /* FIXME should not do that this way */
-        if( p_instance->p_input )
-        {
-#define APPEND_INPUT_INFO( key, format, type ) \
-            vlm_MessageAdd( p_msg_instance, vlm_MessageNew( key, format, \
-                            var_Get ## type( p_instance->p_input, key ) ) )
-            APPEND_INPUT_INFO( "position", "%f", Float );
-            APPEND_INPUT_INFO( "time", "%"PRId64, Integer );
-            APPEND_INPUT_INFO( "length", "%"PRId64, Integer );
-            APPEND_INPUT_INFO( "rate", "%f", Float );
-            APPEND_INPUT_INFO( "title", "%"PRId64, Integer );
-            APPEND_INPUT_INFO( "chapter", "%"PRId64, Integer );
-            APPEND_INPUT_INFO( "can-seek", "%d", Bool );
-        }
+#define APPEND_INPUT_INFO( key, format, value ) \
+        vlm_MessageAdd( p_msg_instance, vlm_MessageNew( key, format, value ) )
+        APPEND_INPUT_INFO( "position", "%f", position );
+        APPEND_INPUT_INFO( "time", "%"PRId64, time );
+        APPEND_INPUT_INFO( "length", "%"PRId64, length );
+        APPEND_INPUT_INFO( "rate", "%f", rate );
+        APPEND_INPUT_INFO( "title", "%zd", title );
+        APPEND_INPUT_INFO( "chapter", "%zd", chapter );
+        APPEND_INPUT_INFO( "can-seek", "%d", can_seek );
 #undef APPEND_INPUT_INFO
         vlm_MessageAdd( p_msg_instance, vlm_MessageNew( "playlistindex",
                         "%d", p_instance->i_index + 1 ) );
@@ -1453,20 +1430,11 @@ static vlm_message_t *vlm_Show( vlm_t *vlm, vlm_media_sys_t *media,
     {
         vlm_message_t *p_msg;
         vlm_message_t *p_msg_child;
-        int i_vod = 0, i_broadcast = 0;
-
-        for( int i = 0; i < vlm->i_media; i++ )
-        {
-            if( vlm->media[i]->cfg.b_vod )
-                i_vod++;
-            else
-                i_broadcast++;
-        }
+        int i_broadcast = vlm->i_media;
 
         p_msg = vlm_MessageSimpleNew( "show" );
         p_msg_child = vlm_MessageAdd( p_msg, vlm_MessageNew( "media",
-                                      "( %d broadcast - %d vod )", i_broadcast,
-                                      i_vod ) );
+                                      "( %d broadcast )", i_broadcast ) );
 
         for( int i = 0; i < vlm->i_media; i++ )
             vlm_MessageAdd( p_msg_child, vlm_ShowMedia( vlm->media[i] ) );
@@ -1609,11 +1577,11 @@ static char *Save( vlm_t *vlm )
         vlm_media_sys_t *media = vlm->media[i];
         vlm_media_t *p_cfg = &media->cfg;
 
-        vlc_memstream_printf( &stream, "new %s %s %sabled", p_cfg->psz_name,
-                              p_cfg->b_vod ? "vod" : "broadcast",
+        vlc_memstream_printf( &stream, "new %s broadcast %sabled",
+                              p_cfg->psz_name,
                               p_cfg->b_enabled ? "en" : "dis" );
 
-        if( !p_cfg->b_vod && p_cfg->broadcast.b_loop )
+        if( p_cfg->broadcast.b_loop )
             vlc_memstream_puts( &stream, " loop" );
         vlc_memstream_putc( &stream, '\n' );
 
@@ -1628,10 +1596,6 @@ static char *Save( vlm_t *vlm )
         for( int j = 0; j < p_cfg->i_option; j++ )
             vlc_memstream_printf( &stream, "setup %s option %s\n",
                                   p_cfg->psz_name, p_cfg->ppsz_option[j] );
-
-        if( p_cfg->b_vod && p_cfg->vod.psz_mux )
-            vlc_memstream_printf( &stream, "setup %s mux %s\n",
-                                  p_cfg->psz_name, p_cfg->vod.psz_mux );
     }
 
     /* and now, the schedule scripts */

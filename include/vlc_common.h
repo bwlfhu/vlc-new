@@ -185,7 +185,7 @@
 # define VLC_USED
 #endif
 
-#ifdef __ELF__
+#if defined (__ELF__) || defined (__MACH__)
 # define VLC_WEAK __attribute__((weak))
 #else
 /**
@@ -354,9 +354,9 @@ typedef struct module_config_t module_config_t;
 typedef struct config_category_t config_category_t;
 
 /* Input */
-typedef struct input_thread_t input_thread_t;
 typedef struct input_item_t input_item_t;
 typedef struct input_item_node_t input_item_node_t;
+typedef struct input_source_t input_source_t;
 typedef struct stream_t     stream_t;
 typedef struct stream_t demux_t;
 typedef struct es_out_t     es_out_t;
@@ -372,6 +372,7 @@ typedef struct video_format_t video_format_t;
 typedef struct subs_format_t subs_format_t;
 typedef struct es_format_t es_format_t;
 typedef struct video_palette_t video_palette_t;
+typedef struct vlc_es_id_t vlc_es_id_t;
 
 /* Audio */
 typedef struct audio_output audio_output_t;
@@ -408,7 +409,6 @@ typedef struct session_descriptor_t session_descriptor_t;
 
 /* Decoders */
 typedef struct decoder_t         decoder_t;
-typedef struct decoder_synchro_t decoder_synchro_t;
 
 /* Encoders */
 typedef struct encoder_t      encoder_t;
@@ -427,7 +427,7 @@ typedef struct block_t      block_t;
 typedef struct block_fifo_t block_fifo_t;
 
 /* Hashing */
-typedef struct md5_s md5_t;
+typedef struct vlc_hash_md5_ctx vlc_hash_md5_t;
 
 /* XML */
 typedef struct xml_t xml_t;
@@ -466,15 +466,24 @@ typedef union
 /*****************************************************************************
  * Error values (shouldn't be exposed)
  *****************************************************************************/
-#define VLC_SUCCESS        (-0) /**< No error */
-#define VLC_EGENERIC       (-1) /**< Unspecified error */
-#define VLC_ENOMEM         (-2) /**< Not enough memory */
-#define VLC_ETIMEOUT       (-3) /**< Timeout */
-#define VLC_ENOMOD         (-4) /**< Module not found */
-#define VLC_ENOOBJ         (-5) /**< Object not found */
-#define VLC_ENOVAR         (-6) /**< Variable not found */
-#define VLC_EBADVAR        (-7) /**< Bad variable value */
-#define VLC_ENOITEM        (-8) /**< Item not found */
+/** No error */
+#define VLC_SUCCESS        (-0)
+/** Unspecified error */
+#define VLC_EGENERIC       (-1)
+/** Not enough memory */
+#define VLC_ENOMEM         (-2)
+/** Timeout */
+#define VLC_ETIMEOUT       (-3)
+/** Module not found */
+#define VLC_ENOMOD         (-4)
+/** Object not found */
+#define VLC_ENOOBJ         (-5)
+/** Variable not found */
+#define VLC_ENOVAR         (-6)
+/** Bad variable value */
+#define VLC_EBADVAR        (-7)
+/** Item not found */
+#define VLC_ENOITEM        (-8)
 
 /*****************************************************************************
  * Variable callbacks: called when the value is modified
@@ -538,6 +547,23 @@ typedef int ( * vlc_list_callback_t ) ( vlc_object_t *,      /* variable's objec
 
 /* clip v in [min, max] */
 #define VLC_CLIP(v, min, max)    __MIN(__MAX((v), (min)), (max))
+
+/**
+ * Make integer v a multiple of align
+ *
+ * \note align must be a power of 2
+ */
+VLC_USED
+static inline size_t vlc_align(size_t v, size_t align)
+{
+    return (v + (align - 1)) & ~(align - 1);
+}
+
+#if defined(__clang__) && __has_attribute(diagnose_if)
+static inline size_t vlc_align(size_t v, size_t align)
+    __attribute__((diagnose_if(((align & (align - 1)) || (align == 0)),
+        "align must be power of 2", "error")));
+#endif
 
 /** Greatest common divisor */
 VLC_USED
@@ -671,7 +697,7 @@ VLC_INT_FUNC(popcount)
     _Generic((x), \
         unsigned char: (vlc_clz(x) - (sizeof (unsigned) - 1) * 8), \
         unsigned short: (vlc_clz(x) \
-		- (sizeof (unsigned) - sizeof (unsigned short)) * 8), \
+        - (sizeof (unsigned) - sizeof (unsigned short)) * 8), \
         unsigned: vlc_clz(x), \
         unsigned long: vlc_clzl(x), \
         unsigned long long: vlc_clzll(x))
@@ -935,8 +961,6 @@ static inline bool mul_overflow(unsigned long long a, unsigned long long b,
 
 #define EMPTY_STR(str) (!str || !*str)
 
-VLC_API char const * vlc_error( int ) VLC_USED;
-
 #include <vlc_arrays.h>
 
 /* MSB (big endian)/LSB (little endian) conversions - network order is always
@@ -1100,7 +1124,10 @@ static inline void SetQWLE (void *p, uint64_t qw)
 #       define O_NONBLOCK 0
 #   endif
 
-#   include <tchar.h>
+/* the mingw32 swab() and win32 _swab() prototypes expect a char* instead of a
+   const void* */
+#  define swab(a,b,c)  swab((char*) (a), (char*) (b), (c))
+
 #endif /* _WIN32 */
 
 typedef struct {
@@ -1116,6 +1143,12 @@ VLC_USED VLC_MALLOC
 static inline void *vlc_alloc(size_t count, size_t size)
 {
     return mul_overflow(count, size, &size) ? NULL : malloc(size);
+}
+
+VLC_USED
+static inline void *vlc_reallocarray(void *ptr, size_t count, size_t size)
+{
+    return mul_overflow(count, size, &size) ? NULL : realloc(ptr, size);
 }
 
 /*****************************************************************************
@@ -1152,14 +1185,6 @@ static inline void *xrealloc(void *ptr, size_t len)
     if (unlikely(nptr == NULL && len > 0))
         abort();
     return nptr;
-}
-
-static inline void *xcalloc(size_t n, size_t size)
-{
-    void *ptr = calloc(n, size);
-    if (unlikely(ptr == NULL && (n > 0 || size > 0)))
-        abort ();
-    return ptr;
 }
 
 static inline char *xstrdup (const char *str)

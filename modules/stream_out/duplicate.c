@@ -2,7 +2,6 @@
  * duplicate.c: duplicate stream output module
  *****************************************************************************
  * Copyright (C) 2003-2004 the VideoLAN team
- * $Id$
  *
  * Author: Laurent Aimar <fenrir@via.ecp.fr>
  *
@@ -42,7 +41,7 @@ static void     Close   ( vlc_object_t * );
 
 vlc_module_begin ()
     set_description( N_("Duplicate stream output") )
-    set_capability( "sout stream", 50 )
+    set_capability( "sout output", 50 )
     add_shortcut( "duplicate", "dup" )
     set_category( CAT_SOUT )
     set_subcategory( SUBCAT_SOUT_STREAM )
@@ -76,6 +75,33 @@ typedef struct
 } sout_stream_id_sys_t;
 
 static bool ESSelected( const es_format_t *fmt, char *psz_select );
+
+/*****************************************************************************
+ * Control
+ *****************************************************************************/
+static int Control( sout_stream_t *p_stream, int i_query, va_list args )
+{
+    sout_stream_sys_t *p_sys = p_stream->p_sys;
+
+    /* Fanout controls */
+    switch( i_query )
+    {
+        case SOUT_STREAM_ID_SPU_HIGHLIGHT:
+        {
+            sout_stream_id_sys_t *id = va_arg(args, void *);
+            void *spu_hl = va_arg(args, void *);
+            for( int i = 0; i < id->i_nb_ids; i++ )
+            {
+                if( id->pp_ids[i] )
+                    sout_StreamControl( p_sys->pp_streams[i], i_query,
+                                        id->pp_ids[i], spu_hl );
+            }
+            return VLC_SUCCESS;
+        }
+    }
+
+    return VLC_EGENERIC;
+}
 
 /*****************************************************************************
  * Open:
@@ -150,6 +176,7 @@ static int Open( vlc_object_t *p_this )
     p_stream->pf_add    = Add;
     p_stream->pf_del    = Del;
     p_stream->pf_send   = Send;
+    p_stream->pf_control = Control;
 
     p_stream->p_sys     = p_sys;
 

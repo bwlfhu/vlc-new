@@ -2,7 +2,6 @@
  * bridge.c: bridge stream output module
  *****************************************************************************
  * Copyright (C) 2005-2008 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Christophe Massiot <massiot@via.ecp.fr>
  *          Antoine Cellerier <dionoea at videolan dot org>
@@ -93,7 +92,7 @@ vlc_module_begin ()
     set_description( N_("Bridge stream output"))
     add_submodule ()
     set_section( N_("Bridge out"), NULL )
-    set_capability( "sout stream", 50 )
+    set_capability( "sout output", 50 )
     add_shortcut( "bridge-out" )
     /* Only usable with VLM. No category so not in gui preferences
     set_category( CAT_SOUT )
@@ -106,7 +105,7 @@ vlc_module_begin ()
 
     add_submodule ()
     set_section( N_("Bridge in"), NULL )
-    set_capability( "sout stream", 50 )
+    set_capability( "sout filter", 50 )
     add_shortcut( "bridge-in" )
     /*set_category( CAT_SOUT )
     set_subcategory( SUBCAT_SOUT_STREAM )*/
@@ -237,6 +236,7 @@ static void CloseOut( vlc_object_t * p_this )
 
 static void *AddOut( sout_stream_t *p_stream, const es_format_t *p_fmt )
 {
+    vlc_object_t *vlc = VLC_OBJECT(vlc_object_instance(p_stream));
     out_sout_stream_sys_t *p_sys = (out_sout_stream_sys_t *)p_stream->p_sys;
     bridge_t *p_bridge;
     bridged_es_t *p_es;
@@ -251,13 +251,13 @@ static void *AddOut( sout_stream_t *p_stream, const es_format_t *p_fmt )
 
     vlc_mutex_lock( &lock );
 
-    p_bridge = var_GetAddress( p_stream->obj.libvlc, p_sys->psz_name );
+    p_bridge = var_GetAddress( vlc, p_sys->psz_name );
     if ( p_bridge == NULL )
     {
         p_bridge = xmalloc( sizeof( bridge_t ) );
 
-        var_Create( p_stream->obj.libvlc, p_sys->psz_name, VLC_VAR_ADDRESS );
-        var_SetAddress( p_stream->obj.libvlc, p_sys->psz_name, p_bridge );
+        var_Create( vlc, p_sys->psz_name, VLC_VAR_ADDRESS );
+        var_SetAddress( vlc, p_sys->psz_name, p_bridge );
 
         p_bridge->i_es_num = 0;
         p_bridge->pp_es = NULL;
@@ -383,13 +383,6 @@ static int OpenIn( vlc_object_t *p_this )
     if( unlikely( !p_sys ) )
         return VLC_ENOMEM;
 
-    if( !p_stream->p_next )
-    {
-        msg_Err( p_stream, "cannot create chain" );
-        free( p_sys );
-        return VLC_EGENERIC;
-    }
-
     config_ChainParse( p_stream, SOUT_CFG_PREFIX_IN, ppsz_sout_options_in,
                    p_stream->p_cfg );
 
@@ -503,6 +496,7 @@ static void DelIn( sout_stream_t *p_stream, void *_id )
 
 static int SendIn( sout_stream_t *p_stream, void *_id, block_t *p_buffer )
 {
+    vlc_object_t *vlc = VLC_OBJECT(vlc_object_instance(p_stream));
     in_sout_stream_sys_t *p_sys = (in_sout_stream_sys_t *)p_stream->p_sys;
     sout_stream_id_sys_t *id = (sout_stream_id_sys_t *)_id;
     bridge_t *p_bridge;
@@ -517,7 +511,7 @@ static int SendIn( sout_stream_t *p_stream, void *_id, block_t *p_buffer )
     /* Then check all bridged streams */
     vlc_mutex_lock( &lock );
 
-    p_bridge = var_GetAddress( p_stream->obj.libvlc, p_sys->psz_name );
+    p_bridge = var_GetAddress( vlc, p_sys->psz_name );
 
     if( p_bridge )
     {
@@ -659,7 +653,7 @@ static int SendIn( sout_stream_t *p_stream, void *_id, block_t *p_buffer )
             free( p_bridge->pp_es[i] );
         free( p_bridge->pp_es );
         free( p_bridge );
-        var_Destroy( p_stream->obj.libvlc, p_sys->psz_name );
+        var_Destroy( vlc, p_sys->psz_name );
     }
     }
 

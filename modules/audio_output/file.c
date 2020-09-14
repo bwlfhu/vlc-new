@@ -2,7 +2,6 @@
  * file.c : audio output which writes the samples to a file
  *****************************************************************************
  * Copyright (C) 2002 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Christophe Massiot <massiot@via.ecp.fr>
  *          Gildas Bazin <gbazin@netcourrier.com>
@@ -76,7 +75,7 @@ static const int pi_channels_maps[CHANNELS_MAX+1] =
 static int     Open        ( vlc_object_t * );
 static void    Play        ( audio_output_t *, block_t *, vlc_tick_t );
 static void    Pause       ( audio_output_t *, bool, vlc_tick_t );
-static void    Flush       ( audio_output_t *, bool );
+static void    Flush       ( audio_output_t * );
 
 /*****************************************************************************
  * Module descriptor
@@ -126,14 +125,14 @@ vlc_module_begin ()
 
     set_capability( "audio output", 0 )
     add_shortcut( "file", "audiofile" )
-    set_callbacks( Open, NULL )
+    set_callback( Open )
 vlc_module_end ()
 
 static int Start( audio_output_t *p_aout, audio_sample_format_t *restrict fmt )
 {
     char * psz_name, * psz_format;
-    const char * const * ppsz_compare = format_list;
     int i_channels, i = 0;
+    int i_format_list_size;
 
     if( aout_FormatNbChannels( fmt ) == 0 )
         return VLC_EGENERIC;
@@ -179,16 +178,16 @@ static int Start( audio_output_t *p_aout, audio_sample_format_t *restrict fmt )
         return VLC_EGENERIC;
     }
 
-    while ( *ppsz_compare != NULL )
+    i_format_list_size = (int)ARRAY_SIZE(format_list);
+    for (i = 0; i < i_format_list_size; i++)
     {
-        if ( !strncmp( *ppsz_compare, psz_format, strlen(*ppsz_compare) ) )
+        if ( !strncmp( format_list[i], psz_format, strlen(format_list[i]) ) )
         {
             break;
         }
-        ppsz_compare++; i++;
     }
 
-    if ( *ppsz_compare == NULL )
+    if ( i == i_format_list_size )
     {
         msg_Err( p_aout, "cannot understand the format string (%s)",
                  psz_format );
@@ -340,12 +339,11 @@ static void Pause( audio_output_t *aout, bool paused, vlc_tick_t date )
     (void) aout; (void) paused; (void) date;
 }
 
-static void Flush( audio_output_t *aout, bool wait )
+static void Flush( audio_output_t *aout )
 {
     aout_sys_t *p_sys = aout->sys;
     if( fflush( p_sys->p_file ) )
         msg_Err( aout, "flush error: %s", vlc_strerror_c(errno) );
-    (void) wait;
 }
 
 static int Open(vlc_object_t *obj)

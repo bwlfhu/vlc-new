@@ -3,7 +3,6 @@
  *       multiplexer module for vlc
  *****************************************************************************
  * Copyright (C) 2001, 2002 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Eric Petit <titer@videolan.org>
@@ -39,6 +38,8 @@
 
 #include "bits.h"
 #include "pes.h"
+
+#include "../../demux/mpeg/timestamps.h"
 
 #include <vlc_iso_lang.h>
 
@@ -241,11 +242,6 @@ static int Control( sout_mux_t *p_mux, int i_query, va_list args )
         case MUX_CAN_ADD_STREAM_WHILE_MUXING:
             pb_bool = va_arg( args, bool * );
             *pb_bool = true;
-            return VLC_SUCCESS;
-
-        case MUX_GET_ADD_STREAM_WAIT:
-            pb_bool = va_arg( args, bool * );
-            *pb_bool = false;
             return VLC_SUCCESS;
 
         case MUX_GET_MIME:
@@ -479,7 +475,7 @@ static int Mux( sout_mux_t *p_mux )
         if( p_sys->i_pes_count % 30 == 0)
         {
             vlc_tick_t i_mindts = INT64_MAX;
-            for( size_t i=0; i<p_mux->i_nb_inputs; i++ )
+            for( int i=0; i < p_mux->i_nb_inputs; i++ )
             {
                 ps_stream_t *p_s = (ps_stream_t*)p_input->p_sys;
                 if( p_input->p_fmt->i_cat == SPU_ES && p_mux->i_nb_inputs > 1 )
@@ -488,13 +484,13 @@ static int Mux( sout_mux_t *p_mux )
                     i_mindts = p_s->i_dts;
             }
 
-            if( i_mindts > p_sys->i_instant_dts )
+            if( i_mindts != INT64_MAX && i_mindts > p_sys->i_instant_dts )
             {
                 /* Update the instant bitrate every second or so */
                 if( p_sys->i_instant_size &&
                     i_dts - p_sys->i_instant_dts > VLC_TICK_FROM_SEC(1))
                 {
-                    int64_t i_instant_bitrate = p_sys->i_instant_size * 8000000 /
+                    int64_t i_instant_bitrate = p_sys->i_instant_size * 8 * CLOCK_FREQ /
                             ( i_dts - p_sys->i_instant_dts );
 
                     p_sys->i_instant_bitrate += i_instant_bitrate;
@@ -592,10 +588,10 @@ static void MuxWritePackHeader( sout_mux_t *p_mux, block_t **p_buf,
     sout_mux_sys_t *p_sys = p_mux->p_sys;
     bits_buffer_t bits;
     block_t *p_hdr;
-    vlc_tick_t i_scr;
+    int64_t i_scr;
     int i_mux_rate;
 
-    i_scr = (i_dts - p_sys->i_dts_delay) * 9 / 100;
+    i_scr = TO_SCALE_NZ(i_dts - p_sys->i_dts_delay);
 
     p_hdr = block_Alloc( 18 );
     if( !p_hdr )

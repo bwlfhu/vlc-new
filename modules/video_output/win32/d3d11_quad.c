@@ -24,26 +24,27 @@
 # include "config.h"
 #endif
 
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0601 // _WIN32_WINNT_WIN7
+# undef _WIN32_WINNT
+# define _WIN32_WINNT 0x0601 // _WIN32_WINNT_WIN7
+#endif
+
 #include <assert.h>
 #include <vlc_common.h>
-
-#if !defined(_WIN32_WINNT) || _WIN32_WINNT < _WIN32_WINNT_WIN7
-# undef _WIN32_WINNT
-# define _WIN32_WINNT _WIN32_WINNT_WIN7
-#endif
 
 #define COBJMACROS
 #include <d3d11.h>
 
 #include "d3d11_quad.h"
+#include "common.h"
 
 #define SPHERE_SLICES 128
 #define nbLatBands SPHERE_SLICES
 #define nbLonBands SPHERE_SLICES
 
-void D3D11_RenderQuad(d3d11_device_t *d3d_dev, d3d_quad_t *quad,
+void D3D11_RenderQuad(d3d11_device_t *d3d_dev, d3d_quad_t *quad, d3d_vshader_t *vsshader,
                       ID3D11ShaderResourceView *resourceView[D3D11_MAX_SHADER_VIEW],
-                      ID3D11RenderTargetView *d3drenderTargetView[D3D11_MAX_SHADER_VIEW])
+                      d3d11_select_plane_t selectPlane, void *selectOpaque)
 {
     UINT offset = 0;
 
@@ -51,13 +52,13 @@ void D3D11_RenderQuad(d3d11_device_t *d3d_dev, d3d_quad_t *quad,
     ID3D11DeviceContext_IASetPrimitiveTopology(d3d_dev->d3dcontext, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     /* vertex shader */
-    ID3D11DeviceContext_IASetInputLayout(d3d_dev->d3dcontext, quad->pVertexLayout);
+    ID3D11DeviceContext_IASetInputLayout(d3d_dev->d3dcontext, vsshader->layout);
     ID3D11DeviceContext_IASetVertexBuffers(d3d_dev->d3dcontext, 0, 1, &quad->pVertexBuffer, &quad->vertexStride, &offset);
     ID3D11DeviceContext_IASetIndexBuffer(d3d_dev->d3dcontext, quad->pIndexBuffer, DXGI_FORMAT_R16_UINT, 0);
     if ( quad->pVertexShaderConstants )
         ID3D11DeviceContext_VSSetConstantBuffers(d3d_dev->d3dcontext, 0, 1, &quad->pVertexShaderConstants);
 
-    ID3D11DeviceContext_VSSetShader(d3d_dev->d3dcontext, quad->d3dvertexShader, NULL, 0);
+    ID3D11DeviceContext_VSSetShader(d3d_dev->d3dcontext, vsshader->shader, NULL, 0);
 
     if (quad->d3dsampState[0])
         ID3D11DeviceContext_PSSetSamplers(d3d_dev->d3dcontext, 0, 2, quad->d3dsampState);
@@ -69,17 +70,23 @@ void D3D11_RenderQuad(d3d11_device_t *d3d_dev, d3d_quad_t *quad,
 
     for (size_t i=0; i<D3D11_MAX_SHADER_VIEW; i++)
     {
-        if (!d3drenderTargetView[i])
+        if (!quad->d3dpixelShader[i])
             break;
+
+        if (unlikely(!selectPlane(selectOpaque, i)))
+            continue;
 
         ID3D11DeviceContext_PSSetShader(d3d_dev->d3dcontext, quad->d3dpixelShader[i], NULL, 0);
 
         ID3D11DeviceContext_RSSetViewports(d3d_dev->d3dcontext, 1, &quad->cropViewport[i]);
 
-        ID3D11DeviceContext_OMSetRenderTargets(d3d_dev->d3dcontext, 1, &d3drenderTargetView[i], NULL);
-
         ID3D11DeviceContext_DrawIndexed(d3d_dev->d3dcontext, quad->indexCount, 0, 0);
     }
+
+    /* force unbinding the input texture, otherwise we get:
+     * OMSetRenderTargets: Resource being set to OM RenderTarget slot 0 is still bound on input! */
+    ID3D11ShaderResourceView *reset[D3D11_MAX_SHADER_VIEW] = { 0 };
+    ID3D11DeviceContext_PSSetShaderResources(d3d_dev->d3dcontext, 0, quad->resourceCount, reset);
 }
 
 static bool AllocQuadVertices(vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_quad_t *quad, video_projection_mode_t projection)
@@ -116,8 +123,8 @@ static bool AllocQuadVertices(vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_quad
 
     hr = ID3D11Device_CreateBuffer(d3d_dev->d3ddevice, &bd, NULL, &quad->pVertexBuffer);
     if(FAILED(hr)) {
-      msg_Err(o, "Failed to create vertex buffer. (hr=%lX)", hr);
-      return false;
+        msg_Err(o, "Failed to create vertex buffer. (hr=%lX)", hr);
+        goto fail;
     }
 
     /* create the index of the vertices */
@@ -131,12 +138,22 @@ static bool AllocQuadVertices(vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_quad
     hr = ID3D11Device_CreateBuffer(d3d_dev->d3ddevice, &quadDesc, NULL, &quad->pIndexBuffer);
     if(FAILED(hr)) {
         msg_Err(o, "Could not create the quad indices. (hr=0x%lX)", hr);
-        ID3D11Buffer_Release(quad->pVertexBuffer);
-        quad->pVertexBuffer = NULL;
-        return false;
+        goto fail;
     }
 
     return true;
+fail:
+    if (quad->pVertexBuffer)
+    {
+        ID3D11Buffer_Release(quad->pVertexBuffer);
+        quad->pVertexBuffer = NULL;
+    }
+    if (quad->pVertexBuffer)
+    {
+        ID3D11Buffer_Release(quad->pIndexBuffer);
+        quad->pIndexBuffer = NULL;
+    }
+    return false;
 }
 
 void D3D11_ReleaseQuad(d3d_quad_t *quad)
@@ -156,7 +173,6 @@ void D3D11_ReleaseQuad(d3d_quad_t *quad)
         ID3D11Buffer_Release(quad->pVertexBuffer);
         quad->pVertexBuffer = NULL;
     }
-    quad->d3dvertexShader = NULL;
     if (quad->pIndexBuffer)
     {
         ID3D11Buffer_Release(quad->pIndexBuffer);
@@ -167,14 +183,7 @@ void D3D11_ReleaseQuad(d3d_quad_t *quad)
         ID3D11Buffer_Release(quad->pVertexShaderConstants);
         quad->pVertexShaderConstants = NULL;
     }
-    for (size_t i=0; i<D3D11_MAX_SHADER_VIEW; i++)
-    {
-        if (quad->d3dpixelShader[i])
-        {
-            ID3D11PixelShader_Release(quad->d3dpixelShader[i]);
-            quad->d3dpixelShader[i] = NULL;
-        }
-    }
+    D3D11_ReleasePixelShader(quad);
     for (size_t i=0; i<2; i++)
     {
         if (quad->d3dsampState[i])
@@ -183,7 +192,7 @@ void D3D11_ReleaseQuad(d3d_quad_t *quad)
             quad->d3dsampState[i] = NULL;
         }
     }
-    ReleasePictureSys(&quad->picSys);
+    ReleaseD3D11PictureSys(&quad->picSys);
 }
 
 /**
@@ -403,8 +412,8 @@ static void SetupQuadFlat(d3d_vertex_t *dst_data, const RECT *output,
 static void SetupQuadSphere(d3d_vertex_t *dst_data, const RECT *output,
                             const d3d_quad_t *quad, WORD *triangle_pos)
 {
-    const float scaleX = (float)(output->right  - output->left) / quad->i_width;
-    const float scaleY = (float)(output->bottom - output->top)   / quad->i_height;
+    const float scaleX = (float)(RECTWidth(*output))  / quad->i_width;
+    const float scaleY = (float)(RECTHeight(*output)) / quad->i_height;
     for (unsigned lat = 0; lat <= nbLatBands; lat++) {
         float theta = lat * (float) M_PI / nbLatBands;
         float sinTheta, cosTheta;
@@ -453,37 +462,29 @@ static void SetupQuadSphere(d3d_vertex_t *dst_data, const RECT *output,
 static void SetupQuadCube(d3d_vertex_t *dst_data, const RECT *output,
                           const d3d_quad_t *quad, WORD *triangle_pos)
 {
+#define CUBEFACE(swap, value) \
+    swap(value, -1.f,  1.f), \
+    swap(value, -1.f, -1.f), \
+    swap(value,  1.f,  1.f), \
+    swap(value,  1.f, -1.f)
+
+#define X_FACE(v, a, b) (v), (b), (a)
+#define Y_FACE(v, a, b) (a), (v), (b)
+#define Z_FACE(v, a, b) (a), (b), (v)
+
     static const float coord[] = {
-        -1.0,    1.0,    -1.0f, // front
-        -1.0,    -1.0,   -1.0f,
-        1.0,     1.0,    -1.0f,
-        1.0,     -1.0,   -1.0f,
-
-        -1.0,    1.0,    1.0f, // back
-        -1.0,    -1.0,   1.0f,
-        1.0,     1.0,    1.0f,
-        1.0,     -1.0,   1.0f,
-
-        -1.0,    1.0,    -1.0f, // left
-        -1.0,    -1.0,   -1.0f,
-        -1.0,     1.0,    1.0f,
-        -1.0,     -1.0,   1.0f,
-
-        1.0f,    1.0,    -1.0f, // right
-        1.0f,   -1.0,    -1.0f,
-        1.0f,   1.0,     1.0f,
-        1.0f,   -1.0,    1.0f,
-
-        -1.0,    -1.0,    1.0f, // bottom
-        -1.0,    -1.0,   -1.0f,
-        1.0,     -1.0,    1.0f,
-        1.0,     -1.0,   -1.0f,
-
-        -1.0,    1.0,    1.0f, // top
-        -1.0,    1.0,   -1.0f,
-        1.0,     1.0,    1.0f,
-        1.0,     1.0,   -1.0f,
+        CUBEFACE(Z_FACE, -1.f), // FRONT
+        CUBEFACE(Z_FACE, +1.f), // BACK
+        CUBEFACE(X_FACE, -1.f), // LEFT
+        CUBEFACE(X_FACE, +1.f), // RIGHT
+        CUBEFACE(Y_FACE, -1.f), // BOTTOM
+        CUBEFACE(Y_FACE, +1.f), // TOP
     };
+
+#undef X_FACE
+#undef Y_FACE
+#undef Z_FACE
+#undef CUBEFACE
 
     const float scaleX = (float)(output->right - output->left) / quad->i_width;
     const float scaleY = (float)(output->bottom - output->top) / quad->i_height;
@@ -554,6 +555,7 @@ bool D3D11_UpdateQuadPosition( vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_qua
     bool result = true;
     HRESULT hr;
     D3D11_MAPPED_SUBRESOURCE mappedResource;
+    d3d_vertex_t *dst_data;
 
     if (unlikely(quad->pVertexBuffer == NULL))
         return false;
@@ -564,7 +566,7 @@ bool D3D11_UpdateQuadPosition( vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_qua
         msg_Err(o, "Failed to lock the vertex buffer (hr=0x%lX)", hr);
         return false;
     }
-    d3d_vertex_t *dst_data = mappedResource.pData;
+    dst_data = mappedResource.pData;
 
     /* create the vertex indices */
     hr = ID3D11DeviceContext_Map(d3d_dev->d3dcontext, (ID3D11Resource *)quad->pIndexBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
@@ -573,18 +575,17 @@ bool D3D11_UpdateQuadPosition( vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_qua
         ID3D11DeviceContext_Unmap(d3d_dev->d3dcontext, (ID3D11Resource *)quad->pVertexBuffer, 0);
         return false;
     }
-    WORD *triangle_pos = mappedResource.pData;
 
     switch (quad->projection)
     {
     case PROJECTION_MODE_RECTANGULAR:
-        SetupQuadFlat(dst_data, output, quad, triangle_pos, orientation);
+        SetupQuadFlat(dst_data, output, quad, mappedResource.pData, orientation);
         break;
     case PROJECTION_MODE_EQUIRECTANGULAR:
-        SetupQuadSphere(dst_data, output, quad, triangle_pos);
+        SetupQuadSphere(dst_data, output, quad, mappedResource.pData);
         break;
     case PROJECTION_MODE_CUBEMAP_LAYOUT_STANDARD:
-        SetupQuadCube(dst_data, output, quad, triangle_pos);
+        SetupQuadCube(dst_data, output, quad, mappedResource.pData);
         break;
     default:
         msg_Warn(o, "Projection mode %d not handled", quad->projection);
@@ -597,21 +598,43 @@ bool D3D11_UpdateQuadPosition( vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_qua
     return result;
 }
 
-static bool ShaderUpdateConstants(vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_quad_t *quad, size_t index, void *new_buf)
+static bool ShaderUpdateConstants(vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_quad_t *quad, int type, void *new_buf)
 {
+    ID3D11Resource *res;
+    switch (type)
+    {
+        case PS_CONST_LUMI_BOUNDS:
+            res = (ID3D11Resource *)quad->pPixelShaderConstants[PS_CONST_LUMI_BOUNDS];
+            break;
+        case PS_CONST_COLORSPACE:
+            res = (ID3D11Resource *)quad->pPixelShaderConstants[PS_CONST_COLORSPACE];
+            break;
+        case VS_CONST_VIEWPOINT:
+            res = (ID3D11Resource *)quad->pVertexShaderConstants;
+            break;
+    }
+
     D3D11_MAPPED_SUBRESOURCE mappedResource;
-    HRESULT hr = ID3D11DeviceContext_Map(d3d_dev->d3dcontext, (ID3D11Resource *)quad->pPixelShaderConstants[index], 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
-    if (FAILED(hr))
+    HRESULT hr = ID3D11DeviceContext_Map(d3d_dev->d3dcontext, res, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    if (unlikely(FAILED(hr)))
     {
         msg_Err(o, "Failed to lock the picture shader constants (hr=0x%lX)", hr);
         return false;
     }
 
-    if (index == PS_CONST_LUMI_BOUNDS)
-        memcpy(mappedResource.pData, new_buf,sizeof(PS_CONSTANT_BUFFER));
-    else
-        memcpy(mappedResource.pData, new_buf,sizeof(PS_COLOR_TRANSFORM));
-    ID3D11DeviceContext_Unmap(d3d_dev->d3dcontext, (ID3D11Resource *)quad->pPixelShaderConstants[index], 0);
+    switch (type)
+    {
+        case PS_CONST_LUMI_BOUNDS:
+            memcpy(mappedResource.pData, new_buf, sizeof(PS_CONSTANT_BUFFER));
+            break;
+        case PS_CONST_COLORSPACE:
+            memcpy(mappedResource.pData, new_buf, sizeof(PS_COLOR_TRANSFORM));
+            break;
+        case VS_CONST_VIEWPOINT:
+            memcpy(mappedResource.pData, new_buf, sizeof(VS_PROJECTION_CONST));
+            break;
+    }
+    ID3D11DeviceContext_Unmap(d3d_dev->d3dcontext, res, 0);
     return true;
 }
 
@@ -637,6 +660,92 @@ void D3D11_UpdateQuadLuminanceScale(vlc_object_t *o, d3d11_device_t *d3d_dev, d3
     quad->shaderConstants.LuminanceScale = luminanceScale;
     if (!ShaderUpdateConstants(o, d3d_dev, quad, PS_CONST_LUMI_BOUNDS, &quad->shaderConstants))
         quad->shaderConstants.LuminanceScale = old;
+}
+
+
+static void getZoomMatrix(float zoom, FLOAT matrix[static 16]) {
+
+    const FLOAT m[] = {
+        /* x   y     z     w */
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, zoom, 1.0f
+    };
+
+    memcpy(matrix, m, sizeof(m));
+}
+
+/* perspective matrix see https://www.opengl.org/sdk/docs/man2/xhtml/gluPerspective.xml */
+static void getProjectionMatrix(float sar, float fovy, FLOAT matrix[static 16]) {
+
+    float zFar  = 1000;
+    float zNear = 0.01;
+
+    float f = 1.f / tanf(fovy / 2.f);
+
+    const FLOAT m[] = {
+        f / sar, 0.f,                   0.f,                0.f,
+        0.f,     f,                     0.f,                0.f,
+        0.f,     0.f,     (zNear + zFar) / (zNear - zFar), -1.f,
+        0.f,     0.f, (2 * zNear * zFar) / (zNear - zFar),  0.f};
+
+     memcpy(matrix, m, sizeof(m));
+}
+
+static float UpdateFOVy(float f_fovx, float f_sar)
+{
+    return 2 * atanf(tanf(f_fovx / 2) / f_sar);
+}
+
+static float UpdateZ(float f_fovx, float f_fovy)
+{
+    /* Do trigonometry to calculate the minimal z value
+     * that will allow us to zoom out without seeing the outside of the
+     * sphere (black borders). */
+    float tan_fovx_2 = tanf(f_fovx / 2);
+    float tan_fovy_2 = tanf(f_fovy / 2);
+    float z_min = - SPHERE_RADIUS / sinf(atanf(sqrtf(
+                    tan_fovx_2 * tan_fovx_2 + tan_fovy_2 * tan_fovy_2)));
+
+    /* The FOV value above which z is dynamically calculated. */
+    const float z_thresh = 90.f;
+
+    float f_z;
+    if (f_fovx <= z_thresh * M_PI / 180)
+        f_z = 0;
+    else
+    {
+        float f = z_min / ((FIELD_OF_VIEW_DEGREES_MAX - z_thresh) * M_PI / 180);
+        f_z = f * f_fovx - f * z_thresh * M_PI / 180;
+        if (f_z < z_min)
+            f_z = z_min;
+    }
+    return f_z;
+}
+
+void (D3D11_UpdateViewpoint)(vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_quad_t *quad,
+                             const vlc_viewpoint_t *viewpoint, float f_sar)
+{
+    if (!quad->pVertexShaderConstants)
+        return;
+
+    // Convert degree into radian
+    float f_fovx = viewpoint->fov * (float)M_PI / 180.f;
+    if ( f_fovx > FIELD_OF_VIEW_DEGREES_MAX * M_PI / 180 + 0.001f ||
+         f_fovx < -0.001f )
+        return;
+
+    float f_fovy = UpdateFOVy(f_fovx, f_sar);
+    float f_z = UpdateZ(f_fovx, f_fovy);
+    vlc_viewpoint_t vp;
+    vlc_viewpoint_reverse(&vp, viewpoint);
+
+    getZoomMatrix(SPHERE_RADIUS * f_z, quad->vertexConstants.Zoom);
+    getProjectionMatrix(f_sar, f_fovy, quad->vertexConstants.Projection);
+    vlc_viewpoint_to_4x4(&vp, quad->vertexConstants.View);
+
+    ShaderUpdateConstants(o, d3d_dev, quad, VS_CONST_VIEWPOINT, &quad->vertexConstants);
 }
 
 #undef D3D11_AllocateQuad
@@ -687,18 +796,218 @@ error:
     return VLC_EGENERIC;
 }
 
+struct xy_primary {
+    double x, y;
+};
+
+struct cie1931_primaries {
+    struct xy_primary red, green, blue, white;
+};
+
+static const struct cie1931_primaries STANDARD_PRIMARIES[] = {
+#define CIE_D65 {0.31271, 0.32902}
+#define CIE_C   {0.31006, 0.31616}
+
+    [COLOR_PRIMARIES_BT601_525] = {
+        .red   = {0.630, 0.340},
+        .green = {0.310, 0.595},
+        .blue  = {0.155, 0.070},
+        .white = CIE_D65
+    },
+    [COLOR_PRIMARIES_BT601_625] = {
+        .red   = {0.640, 0.330},
+        .green = {0.290, 0.600},
+        .blue  = {0.150, 0.060},
+        .white = CIE_D65
+    },
+    [COLOR_PRIMARIES_BT709] = {
+        .red   = {0.640, 0.330},
+        .green = {0.300, 0.600},
+        .blue  = {0.150, 0.060},
+        .white = CIE_D65
+    },
+    [COLOR_PRIMARIES_BT2020] = {
+        .red   = {0.708, 0.292},
+        .green = {0.170, 0.797},
+        .blue  = {0.131, 0.046},
+        .white = CIE_D65
+    },
+    [COLOR_PRIMARIES_DCI_P3] = {
+        .red   = {0.680, 0.320},
+        .green = {0.265, 0.690},
+        .blue  = {0.150, 0.060},
+        .white = CIE_D65
+    },
+    [COLOR_PRIMARIES_FCC1953] = {
+        .red   = {0.670, 0.330},
+        .green = {0.210, 0.710},
+        .blue  = {0.140, 0.080},
+        .white = CIE_C
+    },
+#undef CIE_D65
+#undef CIE_C
+};
+
+static void ChromaticAdaptation(const struct xy_primary *src_white,
+                                const struct xy_primary *dst_white,
+                                double in_out[3 * 3])
+{
+    if (fabs(src_white->x - dst_white->x) < 1e-6 &&
+        fabs(src_white->y - dst_white->y) < 1e-6)
+        return;
+
+    /* TODO, see http://www.brucelindbloom.com/index.html?Eqn_ChromAdapt.html */
+}
+
+static void Float3x3Inverse(double in_out[3 * 3])
+{
+    double m00 = in_out[0 + 0*3], m01 = in_out[1 + 0*3], m02 = in_out[2 + 0*3],
+          m10 = in_out[0 + 1*3], m11 = in_out[1 + 1*3], m12 = in_out[2 + 1*3],
+          m20 = in_out[0 + 2*3], m21 = in_out[1 + 2*3], m22 = in_out[2 + 2*3];
+
+    // calculate the adjoint
+    in_out[0 + 0*3] =  (m11 * m22 - m21 * m12);
+    in_out[1 + 0*3] = -(m01 * m22 - m21 * m02);
+    in_out[2 + 0*3] =  (m01 * m12 - m11 * m02);
+    in_out[0 + 1*3] = -(m10 * m22 - m20 * m12);
+    in_out[1 + 1*3] =  (m00 * m22 - m20 * m02);
+    in_out[2 + 1*3] = -(m00 * m12 - m10 * m02);
+    in_out[0 + 2*3] =  (m10 * m21 - m20 * m11);
+    in_out[1 + 2*3] = -(m00 * m21 - m20 * m01);
+    in_out[2 + 2*3] =  (m00 * m11 - m10 * m01);
+
+    // calculate the determinant (as inverse == 1/det * adjoint,
+    // adjoint * m == identity * det, so this calculates the det)
+    double det = m00 * in_out[0 + 0*3] + m10 * in_out[1 + 0*3] + m20 * in_out[2 + 0*3];
+    det = 1.0f / det;
+
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++)
+            in_out[j + i*3] *= det;
+    }
+}
+
+static void Float3x3Multiply(double m1[3 * 3], const double m2[3 * 3])
+{
+    double a00 = m1[0 + 0*3], a01 = m1[1 + 0*3], a02 = m1[2 + 0*3],
+           a10 = m1[0 + 1*3], a11 = m1[1 + 1*3], a12 = m1[2 + 1*3],
+           a20 = m1[0 + 2*3], a21 = m1[1 + 2*3], a22 = m1[2 + 2*3];
+
+    for (int i = 0; i < 3; i++) {
+        m1[i + 0*3] = a00 * m2[i + 0*3] + a01 * m2[i + 1*3] + a02 * m2[i + 2*3];
+        m1[i + 1*3] = a10 * m2[i + 0*3] + a11 * m2[i + 1*3] + a12 * m2[i + 2*3];
+        m1[i + 2*3] = a20 * m2[i + 0*3] + a21 * m2[i + 1*3] + a22 * m2[i + 2*3];
+    }
+}
+
+static void Float3Multiply(const double in[3], const double mult[3 * 3], double out[3])
+{
+    for (size_t i=0; i<3; i++)
+    {
+        out[i] = mult[i + 0*3] * in[0] +
+                 mult[i + 1*3] * in[1] +
+                 mult[i + 2*3] * in[2];
+    }
+}
+
+/* from http://www.brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html */
+static void GetRGB2XYZMatrix(const struct cie1931_primaries *primaries,
+                             double out[3 * 3])
+{
+#define RED   0
+#define GREEN 1
+#define BLUE  2
+    double X[3], Y[3], Z[3], S[3], W[3];
+    double W_TO_S[3 * 3];
+
+    X[RED  ] = primaries->red.x / primaries->red.y;
+    X[GREEN] = 1;
+    X[BLUE ] = (1 - primaries->red.x - primaries->red.y) / primaries->red.y;
+
+    Y[RED  ] = primaries->green.x / primaries->green.y;
+    Y[GREEN] = 1;
+    Y[BLUE ] = (1 - primaries->green.x - primaries->green.y) / primaries->green.y;
+
+    Z[RED  ] = primaries->blue.x / primaries->blue.y;
+    Z[GREEN] = 1;
+    Z[BLUE ] = (1 - primaries->blue.x - primaries->blue.y) / primaries->blue.y;
+
+    W_TO_S[0 + 0*3] = X[RED  ];
+    W_TO_S[1 + 0*3] = X[GREEN];
+    W_TO_S[2 + 0*3] = X[BLUE ];
+    W_TO_S[0 + 1*3] = Y[RED  ];
+    W_TO_S[1 + 1*3] = Y[GREEN];
+    W_TO_S[2 + 1*3] = Y[BLUE ];
+    W_TO_S[0 + 2*3] = Z[RED  ];
+    W_TO_S[1 + 2*3] = Z[GREEN];
+    W_TO_S[2 + 2*3] = Z[BLUE ];
+
+    Float3x3Inverse(W_TO_S);
+
+    W[0] = primaries->white.x / primaries->white.y; /* Xw */
+    W[1] = 1;                  /* Yw */
+    W[2] = (1 - primaries->white.x - primaries->white.y) / primaries->white.y; /* Yw */
+
+    Float3Multiply(W, W_TO_S, S);
+
+    out[0 + 0*3] = S[RED  ] * X[RED  ];
+    out[1 + 0*3] = S[GREEN] * Y[RED  ];
+    out[2 + 0*3] = S[BLUE ] * Z[RED  ];
+    out[0 + 1*3] = S[RED  ] * X[GREEN];
+    out[1 + 1*3] = S[GREEN] * Y[GREEN];
+    out[2 + 1*3] = S[BLUE ] * Z[GREEN];
+    out[0 + 2*3] = S[RED  ] * X[BLUE ];
+    out[1 + 2*3] = S[GREEN] * Y[BLUE ];
+    out[2 + 2*3] = S[BLUE ] * Z[BLUE ];
+#undef RED
+#undef GREEN
+#undef BLUE
+}
+
+/* from http://www.brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html */
+static void GetXYZ2RGBMatrix(const struct cie1931_primaries *primaries,
+                             double out[3 * 3])
+{
+    GetRGB2XYZMatrix(primaries, out);
+    Float3x3Inverse(out);
+}
+
+static void GetPrimariesTransform(FLOAT Primaries[4*4], video_color_primaries_t src,
+                                  video_color_primaries_t dst)
+{
+    const struct cie1931_primaries *p_src = &STANDARD_PRIMARIES[src];
+    const struct cie1931_primaries *p_dst = &STANDARD_PRIMARIES[dst];
+    double rgb2xyz[3 * 3], xyz2rgb[3 * 3];
+
+    /* src[RGB] -> src[XYZ] */
+    GetRGB2XYZMatrix(p_src, rgb2xyz);
+
+    /* src[XYZ] -> dst[XYZ] */
+    ChromaticAdaptation(&p_src->white, &p_dst->white, rgb2xyz);
+
+    /* dst[XYZ] -> dst[RGB] */
+    GetXYZ2RGBMatrix(p_dst, xyz2rgb);
+
+    /* src[RGB] -> src[XYZ] -> dst[XYZ] -> dst[RGB] */
+    Float3x3Multiply(xyz2rgb, rgb2xyz);
+
+    for (size_t i=0;i<3; ++i)
+    {
+        for (size_t j=0;j<3; ++j)
+            Primaries[j + i*4] = xyz2rgb[j + i*3];
+        Primaries[3 + i*4] = 0;
+    }
+    for (size_t j=0;j<4; ++j)
+        Primaries[j + 3*4] = j == 3;
+}
+
 #undef D3D11_SetupQuad
 int D3D11_SetupQuad(vlc_object_t *o, d3d11_device_t *d3d_dev, const video_format_t *fmt, d3d_quad_t *quad,
-                    const display_info_t *displayFormat, const RECT *output,
-                    ID3D11VertexShader *d3dvertexShader, ID3D11InputLayout *pVertexLayout,
-                    video_projection_mode_t projection, video_orientation_t orientation)
+                    const display_info_t *displayFormat)
 {
-    if (D3D11_AllocateQuad(o, d3d_dev, projection, quad) != VLC_SUCCESS)
-        return VLC_EGENERIC;
+    const bool RGB_src_shader = IsRGBShader(quad->textureFormat);
 
-    const bool RGB_shader = IsRGBShader(quad->formatInfo);
-
-    quad->shaderConstants.LuminanceScale = GetFormatLuminance(o, fmt) / (float)displayFormat->luminance_peak;
+    quad->shaderConstants.LuminanceScale = (float)displayFormat->luminance_peak / GetFormatLuminance(o, fmt);
 
     /* pixel shader constant buffer */
     quad->shaderConstants.Opacity = 1.0;
@@ -715,9 +1024,9 @@ int D3D11_SetupQuad(vlc_object_t *o, d3d11_device_t *d3d_dev, const video_format
 
     FLOAT itu_black_level = 0.f;
     FLOAT itu_achromacy   = 0.f;
-    if (!RGB_shader)
+    if (!RGB_src_shader)
     {
-        switch (quad->formatInfo->bitsPerChannel)
+        switch (quad->textureFormat->bitsPerChannel)
         {
         case 8:
             /* Rec. ITU-R BT.709-6 ¶4.6 */
@@ -785,104 +1094,109 @@ int D3D11_SetupQuad(vlc_object_t *o, d3d11_device_t *d3d_dev, const video_format
     memcpy(colorspace.WhitePoint, IDENTITY_4X4, sizeof(colorspace.WhitePoint));
 
     const FLOAT *ppColorspace;
-    if (!IsRGBShader(displayFormat->pixelFormat))
+    if (RGB_src_shader == IsRGBShader(displayFormat->pixelFormat))
     {
-        if (!RGB_shader)
-            ppColorspace = IDENTITY_4X4;
-        else
-        {
-            ppColorspace = COLORSPACE_FULL_RGBA_TO_BT601_YUV;
-            colorspace.WhitePoint[0*4 + 3] = -itu_black_level;
-            colorspace.WhitePoint[1*4 + 3] = itu_achromacy;
-            colorspace.WhitePoint[2*4 + 3] = itu_achromacy;
-        }
+        ppColorspace = IDENTITY_4X4;
+    }
+    else if (RGB_src_shader)
+    {
+        ppColorspace = COLORSPACE_FULL_RGBA_TO_BT601_YUV;
+        colorspace.WhitePoint[0*4 + 3] = -itu_black_level;
+        colorspace.WhitePoint[1*4 + 3] = itu_achromacy;
+        colorspace.WhitePoint[2*4 + 3] = itu_achromacy;
     }
     else
     {
-        if (RGB_shader)
-            ppColorspace = IDENTITY_4X4;
-        else {
-            switch (fmt->space){
-                case COLOR_SPACE_BT709:
+        switch (fmt->space){
+            case COLOR_SPACE_BT709:
+                ppColorspace = COLORSPACE_BT709_YUV_TO_FULL_RGBA;
+                break;
+            case COLOR_SPACE_BT2020:
+                ppColorspace = COLORSPACE_BT2020_YUV_TO_FULL_RGBA;
+                break;
+            case COLOR_SPACE_BT601:
+                ppColorspace = COLORSPACE_BT601_YUV_TO_FULL_RGBA;
+                break;
+            default:
+            case COLOR_SPACE_UNDEF:
+                if( fmt->i_height > 576 )
+                {
                     ppColorspace = COLORSPACE_BT709_YUV_TO_FULL_RGBA;
-                    break;
-                case COLOR_SPACE_BT2020:
-                    ppColorspace = COLORSPACE_BT2020_YUV_TO_FULL_RGBA;
-                    break;
-                case COLOR_SPACE_BT601:
+                }
+                else
+                {
                     ppColorspace = COLORSPACE_BT601_YUV_TO_FULL_RGBA;
-                    break;
-                default:
-                case COLOR_SPACE_UNDEF:
-                    if( fmt->i_height > 576 )
-                        ppColorspace = COLORSPACE_BT709_YUV_TO_FULL_RGBA;
-                    else
-                        ppColorspace = COLORSPACE_BT601_YUV_TO_FULL_RGBA;
-                    break;
-            }
-            /* all matrices work in studio range and output in full range */
-            colorspace.WhitePoint[0*4 + 3] = -itu_black_level;
-            colorspace.WhitePoint[1*4 + 3] = -itu_achromacy;
-            colorspace.WhitePoint[2*4 + 3] = -itu_achromacy;
+                }
+                break;
         }
+        /* all matrices work in studio range and output in full range */
+        colorspace.WhitePoint[0*4 + 3] = -itu_black_level;
+        colorspace.WhitePoint[1*4 + 3] = -itu_achromacy;
+        colorspace.WhitePoint[2*4 + 3] = -itu_achromacy;
     }
 
     memcpy(colorspace.Colorspace, ppColorspace, sizeof(colorspace.Colorspace));
 
+    if (fmt->primaries != displayFormat->primaries)
+    {
+        GetPrimariesTransform(colorspace.Primaries, fmt->primaries,
+                              displayFormat->primaries);
+    }
+
     ShaderUpdateConstants(o, d3d_dev, quad, PS_CONST_COLORSPACE, &colorspace);
-
-
-    quad->picSys.formatTexture = quad->formatInfo->formatTexture;
-    quad->picSys.context = d3d_dev->d3dcontext;
-    ID3D11DeviceContext_AddRef(quad->picSys.context);
-
-    if (!D3D11_UpdateQuadPosition(o, d3d_dev, quad, output, orientation))
-        return VLC_EGENERIC;
 
     for (size_t i=0; i<D3D11_MAX_SHADER_VIEW; i++)
     {
         quad->cropViewport[i].MinDepth = 0.0f;
         quad->cropViewport[i].MaxDepth = 1.0f;
     }
-    quad->d3dvertexShader = d3dvertexShader;
-    quad->pVertexLayout   = pVertexLayout;
-    quad->resourceCount = DxgiResourceCount(quad->formatInfo);
+    quad->resourceCount = DxgiResourceCount(quad->textureFormat);
 
     return VLC_SUCCESS;
 }
 
 void D3D11_UpdateViewport(d3d_quad_t *quad, const RECT *rect, const d3d_format_t *display)
 {
+    LONG srcAreaWidth, srcAreaHeight;
+
+    srcAreaWidth  = RECTWidth(*rect);
+    srcAreaHeight = RECTHeight(*rect);
+
     quad->cropViewport[0].TopLeftX = rect->left;
     quad->cropViewport[0].TopLeftY = rect->top;
-    quad->cropViewport[0].Width    = rect->right  - rect->left;
-    quad->cropViewport[0].Height   = rect->bottom - rect->top;
+    quad->cropViewport[0].Width    = srcAreaWidth;
+    quad->cropViewport[0].Height   = srcAreaHeight;
 
-    switch ( quad->formatInfo->formatTexture )
+    switch ( quad->textureFormat->formatTexture )
     {
     case DXGI_FORMAT_NV12:
     case DXGI_FORMAT_P010:
         quad->cropViewport[1].TopLeftX = rect->left / 2;
         quad->cropViewport[1].TopLeftY = rect->top / 2;
-        quad->cropViewport[1].Width    = (rect->right  - rect->left) / 2;
-        quad->cropViewport[1].Height   = (rect->bottom - rect->top) / 2;
+        quad->cropViewport[1].Width    = srcAreaWidth / 2;
+        quad->cropViewport[1].Height   = srcAreaHeight / 2;
         break;
     case DXGI_FORMAT_R8G8B8A8_UNORM:
     case DXGI_FORMAT_B8G8R8A8_UNORM:
     case DXGI_FORMAT_B8G8R8X8_UNORM:
     case DXGI_FORMAT_B5G6R5_UNORM:
     case DXGI_FORMAT_R10G10B10A2_UNORM:
+    case DXGI_FORMAT_R16G16B16A16_UNORM:
+    case DXGI_FORMAT_YUY2:
+    case DXGI_FORMAT_AYUV:
+    case DXGI_FORMAT_Y210:
+    case DXGI_FORMAT_Y410:
         if ( display->formatTexture == DXGI_FORMAT_NV12 ||
              display->formatTexture == DXGI_FORMAT_P010 )
         {
             quad->cropViewport[1].TopLeftX = rect->left / 2;
             quad->cropViewport[1].TopLeftY = rect->top / 2;
-            quad->cropViewport[1].Width    = (rect->right  - rect->left) / 2;
-            quad->cropViewport[1].Height   = (rect->bottom - rect->top) / 2;
+            quad->cropViewport[1].Width    = srcAreaWidth / 2;
+            quad->cropViewport[1].Height   = srcAreaHeight / 2;
         }
         break;
     case DXGI_FORMAT_UNKNOWN:
-        switch ( quad->formatInfo->fourcc )
+        switch ( quad->textureFormat->fourcc )
         {
         case VLC_CODEC_YUVA:
             if ( display->formatTexture != DXGI_FORMAT_NV12 &&
@@ -893,6 +1207,7 @@ void D3D11_UpdateViewport(d3d_quad_t *quad, const RECT *rect, const d3d_format_t
                 break;
             }
             /* fallthrough */
+        case VLC_CODEC_I420_10L:
         case VLC_CODEC_I420:
             quad->cropViewport[1].TopLeftX = quad->cropViewport[0].TopLeftX / 2;
             quad->cropViewport[1].TopLeftY = quad->cropViewport[0].TopLeftY / 2;

@@ -117,7 +117,6 @@ static const struct key_descriptor
     { N_("Zoom In"),           KEY_ZOOM_IN           },
     { N_("Zoom Out"),          KEY_ZOOM_OUT          },
 };
-#define KEYS_COUNT (sizeof(s_keys)/sizeof(s_keys[0]))
 
 static int keystrcmp (const void *key, const void *elem)
 {
@@ -197,7 +196,7 @@ uint_fast32_t vlc_str2keycode (const char *name)
         name += len + 1;
     }
 
-    struct key_descriptor *d = bsearch (name, s_keys, KEYS_COUNT,
+    struct key_descriptor *d = bsearch (name, s_keys, ARRAY_SIZE(s_keys),
                                         sizeof (s_keys[0]), keystrcmp);
     if (d != NULL)
         code = d->i_code;
@@ -230,7 +229,7 @@ char *vlc_keycode2str (uint_fast32_t code, bool locale)
     char *str, buf[5];
     uintptr_t key = code & ~KEY_MODIFIER;
 
-    for (size_t i = 0; i < KEYS_COUNT; i++)
+    for (size_t i = 0; i < ARRAY_SIZE(s_keys); i++)
         if (s_keys[i].i_code == key)
         {
             name = s_keys[i].psz;
@@ -281,7 +280,7 @@ static const struct name2action
     { "deinterlace", ACTIONID_DEINTERLACE, },
     { "deinterlace-mode", ACTIONID_DEINTERLACE_MODE, },
     { "disc-menu", ACTIONID_DISC_MENU, },
-    { "faster", ACTIONID_FASTER, },
+    { "faster", ACTIONID_RATE_FASTER, },
     { "frame-next", ACTIONID_FRAME_NEXT, },
     { "incr-scalefactor", ACTIONID_SCALE_UP, },
     { "intf-boss", ACTIONID_INTF_BOSS, },
@@ -336,7 +335,7 @@ static const struct name2action
     { "set-bookmark7", ACTIONID_SET_BOOKMARK7, },
     { "set-bookmark8", ACTIONID_SET_BOOKMARK8, },
     { "set-bookmark9", ACTIONID_SET_BOOKMARK9, },
-    { "slower", ACTIONID_SLOWER, },
+    { "slower", ACTIONID_RATE_SLOWER, },
     { "snapshot", ACTIONID_SNAPSHOT, },
     { "stop", ACTIONID_STOP, },
     { "subdelay-down", ACTIONID_SUBDELAY_DOWN, },
@@ -347,6 +346,7 @@ static const struct name2action
     { "subsync-markaudio", ACTIONID_SUBSYNC_MARKAUDIO, },
     { "subsync-marksub", ACTIONID_SUBSYNC_MARKSUB, },
     { "subsync-reset", ACTIONID_SUBSYNC_RESET, },
+    { "subtitle-control-secondary", ACTIONID_SUBTITLE_CONTROL_SECONDARY, },
     { "subtitle-revtrack", ACTIONID_SUBTITLE_REVERSE_TRACK, },
     { "subtitle-text-scale-down", ACTIONID_SUBTITLE_TEXT_SCALE_DOWN, },
     { "subtitle-text-scale-normal", ACTIONID_SUBTITLE_TEXT_SCALE_NORMAL, },
@@ -376,7 +376,6 @@ static const struct name2action
     { "zoom-original", ACTIONID_ZOOM_ORIGINAL, },
     { "zoom-quarter", ACTIONID_ZOOM_QUARTER, },
 };
-#define ACTIONS_COUNT (sizeof (s_names2actions) / sizeof (s_names2actions[0]))
 
 struct mapping
 {
@@ -402,16 +401,18 @@ static int vlc_key_to_action (vlc_object_t *obj, const char *varname,
                               vlc_value_t prevkey, vlc_value_t curkey, void *d)
 {
     void *const *map = d;
-    const struct mapping **pent;
+    const void **pent;
     uint32_t keycode = curkey.i_int;
 
     pent = tfind (&keycode, map, keycmp);
     if (pent == NULL)
         return VLC_SUCCESS;
 
+    const struct mapping *ent = *pent;
+
     (void) varname;
     (void) prevkey;
-    return var_SetInteger (obj, "key-action", (*pent)->action);
+    return var_SetInteger (obj, "key-action", ent->action);
 }
 
 /**
@@ -425,7 +426,7 @@ static int add_mapping (void **map, uint32_t keycode, vlc_action_id_t action)
     entry->key = keycode;
     entry->action = action;
 
-    struct mapping **pent = tsearch (entry, map, keycmp);
+    void **pent = tsearch (entry, map, keycmp);
     if (unlikely(pent == NULL))
         return ENOMEM;
     if (*pent != entry)
@@ -502,7 +503,7 @@ int libvlc_InternalActionsInit (libvlc_int_t *libvlc)
     assert(libvlc != NULL);
 
     vlc_object_t *obj = VLC_OBJECT(libvlc);
-    vlc_actions_t *as = malloc (sizeof (*as) + (1 + ACTIONS_COUNT)
+    vlc_actions_t *as = malloc (sizeof (*as) + (1 + ARRAY_SIZE(s_names2actions))
                       * sizeof (*as->ppsz_keys));
 
     if (unlikely(as == NULL))
@@ -515,7 +516,7 @@ int libvlc_InternalActionsInit (libvlc_int_t *libvlc)
     var_Create (obj, "key-action", VLC_VAR_INTEGER);
 
     /* Initialize from configuration */
-    for (size_t i = 0; i < ACTIONS_COUNT; i++)
+    for (size_t i = 0; i < ARRAY_SIZE(s_names2actions); i++)
     {
 #ifndef NDEBUG
         if (i > 0
@@ -534,7 +535,7 @@ int libvlc_InternalActionsInit (libvlc_int_t *libvlc)
         init_action (obj, &as->map, name + 7, s_names2actions[i].id);
         init_action (obj, &as->global_map, name, s_names2actions[i].id);
     }
-    as->ppsz_keys[ACTIONS_COUNT] = NULL;
+    as->ppsz_keys[ARRAY_SIZE(s_names2actions)] = NULL;
 
     /* Initialize mouse wheel events */
     add_wheel_mapping (&as->map, KEY_MOUSEWHEELRIGHT, KEY_MOUSEWHEELLEFT,
@@ -590,7 +591,8 @@ vlc_actions_get_id (const char *name)
         return ACTIONID_NONE;
     name += 4;
 
-    act = bsearch(name, s_names2actions, ACTIONS_COUNT, sizeof(*act), actcmp);
+    act = bsearch(name, s_names2actions, ARRAY_SIZE(s_names2actions),
+                  sizeof(*act), actcmp);
     return (act != NULL) ? act->id : ACTIONID_NONE;
 }
 
@@ -637,6 +639,6 @@ vlc_actions_get_keycodes(vlc_object_t *p_obj, const char *psz_key_name,
 const char* const*
 vlc_actions_get_key_names(vlc_object_t *p_obj)
 {
-    vlc_actions_t *as = libvlc_priv(p_obj->obj.libvlc)->actions;
+    vlc_actions_t *as = libvlc_priv(vlc_object_instance(p_obj))->actions;
     return as->ppsz_keys;
 }

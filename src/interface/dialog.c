@@ -122,11 +122,11 @@ struct dialog_i11e_context
 static inline vlc_dialog_provider *
 get_dialog_provider(vlc_object_t *p_obj, bool b_check_interact)
 {
-    if (b_check_interact && p_obj->obj.flags & OBJECT_FLAGS_NOINTERACT)
+    if ((b_check_interact && p_obj->no_interact) || vlc_killed())
         return NULL;
 
     vlc_dialog_provider *p_provider =
-        libvlc_priv(p_obj->obj.libvlc)->p_dialog_provider;
+        libvlc_priv(vlc_object_instance(p_obj))->p_dialog_provider;
     assert(p_provider != NULL);
     return p_provider;
 }
@@ -140,8 +140,6 @@ dialog_id_release(vlc_dialog_id *p_id)
         free(p_id->answer.u.login.psz_password);
     }
     free(p_id->psz_progress_text);
-    vlc_mutex_destroy(&p_id->lock);
-    vlc_cond_destroy(&p_id->wait);
     free(p_id);
 }
 
@@ -245,7 +243,6 @@ libvlc_InternalDialogClean(libvlc_int_t *p_libvlc)
     dialog_clear_all_locked(p_provider);
     vlc_mutex_unlock(&p_provider->lock);
 
-    vlc_mutex_destroy(&p_provider->lock);
     free(p_provider);
     libvlc_priv(p_libvlc)->p_dialog_provider = NULL;
 }

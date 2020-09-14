@@ -2,7 +2,6 @@
  * fluidsynth.c: Software MIDI synthesizer using libfluidsynth
  *****************************************************************************
  * Copyright © 2007 Rémi Denis-Courmont
- * $Id$
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -268,7 +267,11 @@ static int DecodeBlock (decoder_t *p_dec, block_t *p_block)
         case 0x90:
             fluid_synth_noteon (p_sys->synth, channel, p1, p2);
             break;
-        /*case 0xA0: note aftertouch not implemented */
+#if (FLUIDSYNTH_VERSION_MAJOR >= 2)
+        case 0xA0:
+            fluid_synth_key_pressure (p_sys->synth, channel, p1, p2);
+            break;
+#endif
         case 0xB0:
             fluid_synth_cc (p_sys->synth, channel, p1, p2);
             break;

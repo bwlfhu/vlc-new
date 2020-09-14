@@ -2,7 +2,6 @@
  * vsxu.cpp: visualization module wrapper for Vovoid VSXu
  *****************************************************************************
  * Copyright © 2009-2012 the VideoLAN team, Vovoid Media Technologies
- * $Id$
  *
  * Authors: Rémi Duraffort <ivoire@videolan.org>
  *          Laurent Aimar
@@ -147,8 +146,6 @@ static int Open( vlc_object_t * p_this )
     return VLC_SUCCESS;
 
 error:
-    vlc_mutex_destroy( &p_sys->cyclic_block_mutex );
-    vlc_mutex_destroy( &p_sys->lock );
     free( p_sys );
     return VLC_EGENERIC;
 }
@@ -170,8 +167,6 @@ static void Close( vlc_object_t *p_this )
 
     /* Free the ressources */
     vlc_gl_surface_Destroy( p_sys->gl );
-    vlc_mutex_destroy( &p_sys->cyclic_block_mutex );
-    vlc_mutex_destroy( &p_sys->lock );
     delete p_sys->vsxu_cyclic_buffer;
     free( p_sys );
 }

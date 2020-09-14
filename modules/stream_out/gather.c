@@ -2,7 +2,6 @@
  * gather.c: gathering stream output module
  *****************************************************************************
  * Copyright (C) 2003-2004 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *
@@ -31,7 +30,6 @@
 
 #include <vlc_common.h>
 #include <vlc_plugin.h>
-#include <vlc_input.h>
 #include <vlc_sout.h>
 #include <vlc_block.h>
 
@@ -43,7 +41,7 @@ static void     Close   ( vlc_object_t * );
 
 vlc_module_begin ()
     set_description( N_("Gathering stream output") )
-    set_capability( "sout stream", 50 )
+    set_capability( "sout filter", 50 )
     add_shortcut( "gather" )
     set_callbacks( Open, Close )
 vlc_module_end ()
@@ -82,11 +80,6 @@ static int Open( vlc_object_t *p_this )
     if( p_sys == NULL )
         return VLC_EGENERIC;
 
-    if( !p_stream->p_next )
-    {
-        free( p_sys );
-        return VLC_EGENERIC;
-    }
     p_stream->pf_add    = Add;
     p_stream->pf_del    = Del;
     p_stream->pf_send   = Send;

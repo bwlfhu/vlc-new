@@ -2,7 +2,6 @@
  * spudec.c : SPU decoder thread
  *****************************************************************************
  * Copyright (C) 2000-2001, 2006 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Sam Hocevar <sam@zoy.org>
  *          Laurent Aimar <fenrir@via.ecp.fr>
@@ -135,7 +134,6 @@ static int Decode( decoder_t *p_dec, block_t *p_block )
 {
     decoder_sys_t *p_sys = p_dec->p_sys;
     block_t       *p_spu_block;
-    subpicture_t  *p_spu;
 
     if( p_block == NULL ) /* No Drain */
         return VLCDEC_SUCCESS;
@@ -152,7 +150,7 @@ static int Decode( decoder_t *p_dec, block_t *p_block )
     block_ChainRelease( p_spu_block );
 
     /* Parse and decode */
-    p_spu = ParsePacket( p_dec );
+    ParsePacket( p_dec, decoder_QueueSub );
 
     /* reinit context */
     p_sys->i_spu_size = 0;
@@ -160,8 +158,6 @@ static int Decode( decoder_t *p_dec, block_t *p_block )
     p_sys->i_spu      = 0;
     p_sys->p_block    = NULL;
 
-    if( p_spu != NULL )
-        decoder_QueueSub( p_dec, p_spu );
     return VLCDEC_SUCCESS;
 }
 
@@ -185,7 +181,7 @@ static block_t *Packetize( decoder_t *p_dec, block_t **pp_block )
     }
 
     p_spu->i_dts = p_spu->i_pts;
-    p_spu->i_length = 0;
+    p_spu->i_length = VLC_TICK_INVALID;
 
     /* reinit context */
     p_sys->i_spu_size = 0;

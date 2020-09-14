@@ -29,6 +29,13 @@ typedef struct csa_t csa_t;
 
 #define TS_PSI_PAT_PID 0x00
 
+#if (VLC_TICK_INVALID + 1 != VLC_TICK_0)
+#   error "can't define TS_UNKNOWN reference"
+#else
+#   define TS_TICK_UNKNOWN (VLC_TICK_INVALID - 1)
+#endif
+#define SETANDVALID(a) (a != TS_TICK_UNKNOWN && a != VLC_TICK_INVALID)
+
 typedef enum ts_standards_e
 {
     TS_STANDARD_AUTO = 0,
@@ -49,6 +56,7 @@ struct demux_sys_t
     stream_t   *stream;
     bool        b_canseek;
     bool        b_canfastseek;
+    bool        b_lowdelay;
     int         current_title;
     int         current_seekpoint;
     unsigned    updates;
@@ -68,13 +76,12 @@ struct demux_sys_t
 
     ts_standards_e standard;
 
+#ifdef HAVE_ARIBB24
     struct
     {
-#ifdef HAVE_ARIBB24
         arib_instance_t *p_instance;
-#endif
-        stream_t     *b25stream;
     } arib;
+#endif
 
     /* All pid */
     ts_pid_list_t pids;
@@ -84,11 +91,9 @@ struct demux_sys_t
 
     enum
     {
-        NO_ES, /* for preparse */
         DELAY_ES,
         CREATE_ES
     } es_creation;
-    #define PREPARSING p_sys->es_creation == NO_ES
 
     /* */
     bool        b_es_id_pid;
@@ -100,6 +105,8 @@ struct demux_sys_t
     bool        b_valid_scrambling;
 
     bool        b_trust_pcr;
+    bool        b_check_pcr_offset;
+    unsigned    i_generated_pcr_dpb_offset;
 
     /* */
     bool        b_access_control;

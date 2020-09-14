@@ -2,7 +2,6 @@
  * directory.c : Use access readdir to output folder content to playlist
  *****************************************************************************
  * Copyright (C) 2014 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Julien 'Lta' BALLET <contact # lta . io >
  *
@@ -27,13 +26,12 @@
 
 #include <vlc_common.h>
 #include <vlc_demux.h>
-#include <vlc_input.h>
+#include <vlc_input_item.h>
 #include <vlc_plugin.h>
 
 static int Demux( demux_t *p_demux )
 {
-    input_item_t *p_input = input_GetItem( p_demux->p_input );
-    input_item_node_t *p_node = input_item_node_Create( p_input );
+    input_item_node_t *p_node = input_item_node_Create( p_demux->p_input_item );
 
     if( vlc_stream_ReadDir( p_demux->s, p_node ) )
     {
@@ -78,7 +76,7 @@ static int Import_Dir( vlc_object_t *p_this )
 
     if( p_demux->s->pf_readdir == NULL )
         return VLC_EGENERIC;
-    if( p_demux->p_input == NULL )
+    if( p_demux->p_input_item == NULL )
         return VLC_ETIMEOUT;
 
     p_demux->pf_demux = Demux;
@@ -94,5 +92,5 @@ vlc_module_begin()
     set_description( N_("Directory import") )
     add_shortcut( "directory" )
     set_capability( "demux", 10 )
-    set_callbacks( Import_Dir, NULL )
+    set_callback( Import_Dir )
 vlc_module_end()

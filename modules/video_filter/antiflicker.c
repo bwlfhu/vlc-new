@@ -2,7 +2,6 @@
  * antiflicker.c : antiflicker video effect plugin for vlc
  *****************************************************************************
  * Copyright (C) 2000-2011 VLC authors and VideoLAN
- * $Id:
  *
  * Authors: Dharani Prabhu <dharani.prabhu.s@gmail.com>
  *
@@ -107,6 +106,7 @@ static int Create( vlc_object_t *p_this )
     switch( p_filter->fmt_in.video.i_chroma )
     {
         CASE_PLANAR_YUV
+            assert(p_filter->vctx_in == NULL);
             break;
 
         default:

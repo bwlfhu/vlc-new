@@ -28,7 +28,7 @@
 #include <vlc_cpu.h>
 
 #undef CPU_FLAGS
-#if defined (__arm__)
+#if defined (__arm__) || defined (__aarch64__)
 # define CPU_FLAGS "Features\t:"
 
 #elif defined (__i386__) || defined (__x86_64__)
@@ -40,13 +40,11 @@
 #endif
 
 #ifdef CPU_FLAGS
-static uint32_t cpu_flags = 0;
-
-static void vlc_CPU_init (void)
+unsigned vlc_CPU_raw(void)
 {
     FILE *info = fopen ("/proc/cpuinfo", "rte");
     if (info == NULL)
-        return;
+        return 0;
 
     char *line = NULL;
     size_t linelen = 0;
@@ -67,9 +65,13 @@ static void vlc_CPU_init (void)
 
         while ((cap = strsep (&p, " ")) != NULL)
         {
-#if defined (__arm__)
+#if defined (__arm__) || defined (__aarch64__)
             if (!strcmp (cap, "neon"))
                 core_caps |= VLC_CPU_ARM_NEON;
+# if defined (__aarch64__)
+            if (!strcmp (cap, "sve"))
+                core_caps |= VLC_CPU_ARM_SVE;
+# endif
 
 #elif defined (__i386__) || defined (__x86_64__)
             if (!strcmp (cap, "mmx"))
@@ -116,19 +118,6 @@ static void vlc_CPU_init (void)
     if (all_caps == 0xFFFFFFFF) /* Error parsing of cpuinfo? */
         all_caps = 0; /* Do not assume any capability! */
 
-    cpu_flags = all_caps;
-}
-
-unsigned vlc_CPU (void)
-{
-    static pthread_once_t once = PTHREAD_ONCE_INIT;
-
-    pthread_once (&once, vlc_CPU_init);
-    return cpu_flags;
-}
-#else /* CPU_FLAGS */
-unsigned vlc_CPU (void)
-{
-    return 0;
+    return all_caps;
 }
 #endif

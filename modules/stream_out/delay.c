@@ -2,7 +2,6 @@
  * delay.c: delay a stream
  *****************************************************************************
  * Copyright © 2009-2011 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Christophe Massiot <massiot@via.ecp.fr>
  *
@@ -53,7 +52,7 @@ static void Close   ( vlc_object_t * );
 vlc_module_begin()
     set_shortname( N_("Delay"))
     set_description( N_("Delay a stream"))
-    set_capability( "sout stream", 50 )
+    set_capability( "sout filter", 50 )
     add_shortcut( "delay" )
     set_category( CAT_SOUT )
     set_subcategory( SUBCAT_SOUT_STREAM )
@@ -90,12 +89,6 @@ static int Open( vlc_object_t *p_this )
 {
     sout_stream_t     *p_stream = (sout_stream_t*)p_this;
     sout_stream_sys_t *p_sys;
-
-    if( !p_stream->p_next )
-    {
-        msg_Err( p_stream, "cannot create chain" );
-        return VLC_EGENERIC;
-    }
 
     p_sys = calloc( 1, sizeof( sout_stream_sys_t ) );
     if( !p_sys )

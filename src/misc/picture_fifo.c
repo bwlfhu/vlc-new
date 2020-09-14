@@ -3,7 +3,6 @@
  *****************************************************************************
  * Copyright (C) 2009 VLC authors and VideoLAN
  * Copyright (C) 2009 Laurent Aimar <fenrir _AT_ videolan _DOT_ org>
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir _AT_ videolan _DOT_ org>
  *
@@ -143,7 +142,6 @@ void picture_fifo_OffsetDate(picture_fifo_t *fifo, vlc_tick_t delta)
 void picture_fifo_Delete(picture_fifo_t *fifo)
 {
     picture_fifo_Flush(fifo, VLC_TICK_INVALID, true);
-    vlc_mutex_destroy(&fifo->lock);
     free(fifo);
 }
 

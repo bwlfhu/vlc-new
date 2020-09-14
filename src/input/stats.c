@@ -2,7 +2,6 @@
  * stats.c: Statistics handling
  *****************************************************************************
  * Copyright (C) 2006 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Clément Stenac <zorglub@videolan.org>
  *
@@ -67,14 +66,13 @@ struct input_stats *input_stats_Create(void)
     atomic_init(&stats->played_abuffers, 0);
     atomic_init(&stats->lost_abuffers, 0);
     atomic_init(&stats->displayed_pictures, 0);
+    atomic_init(&stats->late_pictures, 0);
     atomic_init(&stats->lost_pictures, 0);
     return stats;
 }
 
 void input_stats_Destroy(struct input_stats *stats)
 {
-    vlc_mutex_destroy(&stats->demux_bitrate.lock);
-    vlc_mutex_destroy(&stats->input_bitrate.lock);
     free(stats);
 }
 
@@ -109,6 +107,8 @@ void input_stats_Compute(struct input_stats *stats, input_stats_t *st)
                                                memory_order_relaxed);
     st->i_displayed_pictures = atomic_load_explicit(&stats->displayed_pictures,
                                                     memory_order_relaxed);
+    st->i_late_pictures = atomic_load_explicit(&stats->late_pictures,
+                                                    memory_order_relaxed);
     st->i_lost_pictures = atomic_load_explicit(&stats->lost_pictures,
                                                memory_order_relaxed);
 }
@@ -120,6 +120,7 @@ void input_stats_Compute(struct input_stats *stats, input_stats_t *st)
  */
 void input_rate_Add(input_rate_t *counter, uintmax_t val)
 {
+    vlc_mutex_lock(&counter->lock);
     counter->updates++;
     counter->value += val;
 
@@ -127,11 +128,15 @@ void input_rate_Add(input_rate_t *counter, uintmax_t val)
     vlc_tick_t now = vlc_tick_now();
     if (counter->samples[0].date != VLC_TICK_INVALID
      && (now - counter->samples[0].date) < VLC_TICK_FROM_SEC(1))
+    {
+        vlc_mutex_unlock(&counter->lock);
         return;
+    }
 
     memcpy(counter->samples + 1, counter->samples,
            sizeof (counter->samples[0]));
 
     counter->samples[0].value = counter->value;
     counter->samples[0].date = now;
+    vlc_mutex_unlock(&counter->lock);
 }

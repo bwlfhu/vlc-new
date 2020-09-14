@@ -109,7 +109,9 @@ typedef struct
     float             rate; /**< Frame rate */
     xcb_window_t      window; /**< Captured window XID  */
     xcb_pixmap_t      pixmap; /**< Pixmap for composited capture */
+#ifdef HAVE_SYS_SHM_H
     xcb_shm_seg_t     segment; /**< SHM segment XID */
+#endif
     int16_t           x, y; /**< Requested capture top-left coordinates */
     uint16_t          w, h; /**< Requested capture pixel dimensions */
     uint8_t           bpp; /**< Actual bytes per pixel *es */
@@ -218,7 +220,9 @@ static int Open (vlc_object_t *obj)
 
     /* Window properties */
     p_sys->pixmap = xcb_generate_id (conn);
+#ifdef HAVE_SYS_SHM_H
     p_sys->segment = xcb_generate_id (conn);
+#endif
     p_sys->shm = CheckSHM (conn);
     p_sys->w = var_InheritInteger (obj, "screen-width");
     p_sys->h = var_InheritInteger (obj, "screen-height");
@@ -292,8 +296,7 @@ static int Control (demux_t *demux, int query, va_list args)
         case DEMUX_GET_LENGTH:
         case DEMUX_GET_TIME:
         {
-            int64_t *v = va_arg (args, int64_t *);
-            *v = 0;
+            *va_arg (args, vlc_tick_t *) = 0;
             return VLC_SUCCESS;
         }
 
@@ -434,7 +437,7 @@ discard:
     free (geo);
 
     block_t *block = NULL;
-#if HAVE_SYS_SHM_H
+#ifdef HAVE_SYS_SHM_H
     if (sys->shm)
     {   /* Capture screen through shared memory */
         size_t size = w * h * sys->bpp;

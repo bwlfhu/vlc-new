@@ -2,7 +2,6 @@
  * async_queue.cpp
  *****************************************************************************
  * Copyright (C) 2003 the VideoLAN team
- * $Id$
  *
  * Authors: Cyril Deguet     <asmax@via.ecp.fr>
  *          Olivier Teulière <ipkiss@via.ecp.fr>
@@ -46,7 +45,6 @@ AsyncQueue::AsyncQueue( intf_thread_t *pIntf ): SkinObject( pIntf ),
 AsyncQueue::~AsyncQueue()
 {
     delete( m_pTimer );
-    vlc_mutex_destroy( &m_lock );
 }
 
 

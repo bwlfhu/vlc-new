@@ -34,8 +34,8 @@
 #include "encoder.h"
 #include "encoder_priv.h"
 
-static void transcode_video_framerate_apply( const video_format_t *p_src,
-                                             video_format_t *p_dst )
+void transcode_video_framerate_apply( const video_format_t *p_src,
+                                            video_format_t *p_dst )
 {
     /* Handle frame rate conversion */
     if( !p_dst->i_frame_rate || !p_dst->i_frame_rate_base )
@@ -55,7 +55,7 @@ static void transcode_video_framerate_apply( const video_format_t *p_src,
                   p_dst->i_frame_rate,  p_dst->i_frame_rate_base, 0 );
 }
 
-static void transcode_video_size_apply( vlc_object_t *p_obj,
+static void transcode_video_scale_apply( vlc_object_t *p_obj,
                                         const video_format_t *p_src,
                                         float f_scale,
                                         unsigned i_maxwidth,
@@ -162,8 +162,8 @@ static void transcode_video_size_apply( vlc_object_t *p_obj,
                      i_dst_visible_width, i_dst_visible_height );
 }
 
-static void transcode_video_sar_apply( const video_format_t *p_src,
-                                       video_format_t *p_dst )
+void transcode_video_sar_apply( const video_format_t *p_src,
+                                      video_format_t *p_dst )
 {
     /* Check whether a particular aspect ratio was requested */
     if( p_dst->i_sar_num <= 0 || p_dst->i_sar_den <= 0 )
@@ -182,11 +182,40 @@ static void transcode_video_sar_apply( const video_format_t *p_src,
     }
 }
 
+static void transcode_video_size_config_apply( vlc_object_t *p_obj,
+                                               const video_format_t *p_srcref,
+                                               const transcode_encoder_config_t *p_cfg,
+                                               video_format_t *p_dst )
+{
+    if( !p_cfg->video.f_scale &&
+        (p_cfg->video.i_width & ~1) && (p_cfg->video.i_width & ~1) )
+    {
+        p_dst->i_width = p_dst->i_visible_width = p_cfg->video.i_width & ~1;
+        p_dst->i_height = p_dst->i_visible_height = p_cfg->video.i_height & ~1;
+    }
+    else if( p_cfg->video.f_scale )
+    {
+        transcode_video_scale_apply( p_obj,
+                                     p_srcref,
+                                     p_cfg->video.f_scale,
+                                     p_cfg->video.i_maxwidth,
+                                     p_cfg->video.i_maxheight,
+                                     p_dst );
+    }
+    else
+    {
+        p_dst->i_width = p_srcref->i_width;
+        p_dst->i_visible_width = p_srcref->i_visible_width;
+        p_dst->i_height = p_srcref->i_height;
+        p_dst->i_visible_height = p_srcref->i_visible_height;
+    }
+}
+
 void transcode_encoder_video_configure( vlc_object_t *p_obj,
-                                        const video_format_t *p_dec_in,
                                         const video_format_t *p_dec_out,
                                         const transcode_encoder_config_t *p_cfg,
                                         const video_format_t *p_src,
+                                        vlc_video_context *vctx_in,
                                         transcode_encoder_t *p_enc )
 {
     video_format_t *p_enc_in = &p_enc->p_encoder->fmt_in.video;
@@ -195,8 +224,6 @@ void transcode_encoder_video_configure( vlc_object_t *p_obj,
     /* Complete destination format */
     p_enc->p_encoder->fmt_out.i_codec = p_enc_out->i_chroma = p_cfg->i_codec;
     p_enc->p_encoder->fmt_out.i_bitrate = p_cfg->video.i_bitrate;
-    p_enc_out->i_width = p_enc_out->i_visible_width  = p_cfg->video.i_width & ~1;
-    p_enc_out->i_height = p_enc_out->i_visible_height = p_cfg->video.i_height & ~1;
     p_enc_out->i_sar_num = p_enc_out->i_sar_den = 0;
     if( p_cfg->video.fps.num )
     {
@@ -207,7 +234,9 @@ void transcode_encoder_video_configure( vlc_object_t *p_obj,
     }
 
     /* Complete source format */
-    p_enc_in->orientation = p_enc_out->orientation = p_dec_in->orientation;
+    p_enc_in->orientation = ORIENT_NORMAL;
+    p_enc_out->orientation = p_enc_in->orientation;
+
     p_enc_in->i_chroma = p_enc->p_encoder->fmt_in.i_codec;
 
     transcode_video_framerate_apply( p_src, p_enc_out );
@@ -217,11 +246,9 @@ void transcode_encoder_video_configure( vlc_object_t *p_obj,
              p_dec_out->i_frame_rate, p_dec_out->i_frame_rate_base,
              p_enc_in->i_frame_rate, p_enc_in->i_frame_rate_base );
 
-    transcode_video_size_apply( p_obj, p_src,
-                                p_cfg->video.f_scale,
-                                p_cfg->video.i_maxwidth,
-                                p_cfg->video.i_maxheight,
-                                p_enc_out );
+    /* Modify to requested sizes/scale */
+    transcode_video_size_config_apply( p_obj, p_src, p_cfg, p_enc_out );
+    /* Propagate sizing to output */
     p_enc_in->i_width = p_enc_out->i_width;
     p_enc_in->i_visible_width = p_enc_out->i_visible_width;
     p_enc_in->i_height = p_enc_out->i_height;
@@ -234,11 +261,17 @@ void transcode_encoder_video_configure( vlc_object_t *p_obj,
              p_enc_out->i_sar_num * p_enc_out->i_width,
              p_enc_out->i_sar_den * p_enc_out->i_height );
 
+    p_enc->p_encoder->vctx_in = vctx_in;
+
     /* Keep colorspace etc info along */
     p_enc_out->space     = p_src->space;
     p_enc_out->transfer  = p_src->transfer;
     p_enc_out->primaries = p_src->primaries;
-    p_enc_out->b_color_range_full = p_src->b_color_range_full;
+    p_enc_out->color_range = p_src->color_range;
+
+     /* set masks when RGB */
+    video_format_FixRgb(&p_enc->p_encoder->fmt_in.video);
+    video_format_FixRgb(&p_enc->p_encoder->fmt_out.video);
 
     if ( p_cfg->psz_lang )
     {
@@ -253,16 +286,12 @@ void transcode_encoder_video_configure( vlc_object_t *p_obj,
              (const char *)&p_enc_in->i_chroma);
 }
 
-int transcode_encoder_video_test( vlc_object_t *p_obj,
+int transcode_encoder_video_test( encoder_t *p_encoder,
                                   const transcode_encoder_config_t *p_cfg,
                                   const es_format_t *p_dec_fmtin,
                                   vlc_fourcc_t i_codec_in,
                                   es_format_t *p_enc_wanted_in )
 {
-    encoder_t *p_encoder = sout_EncoderCreate( p_obj );
-    if( !p_encoder )
-        return VLC_EGENERIC;
-
     p_encoder->i_threads = p_cfg->video.threads.i_count;
     p_encoder->p_cfg = p_cfg->p_config_chain;
 
@@ -294,7 +323,7 @@ int transcode_encoder_video_test( vlc_object_t *p_obj,
     module_t *p_module = module_need( p_encoder, "encoder", p_cfg->psz_name, true );
     if( !p_module )
     {
-        msg_Err( p_obj, "cannot find video encoder (module:%s fourcc:%4.4s). "
+        msg_Err( p_encoder, "cannot find video encoder (module:%s fourcc:%4.4s). "
                            "Take a look few lines earlier to see possible reason.",
                  p_cfg->psz_name ? p_cfg->psz_name : "any",
                  (char *)&p_cfg->i_codec );
@@ -311,11 +340,12 @@ int transcode_encoder_video_test( vlc_object_t *p_obj,
 
     /* output our requested format */
     es_format_Copy( p_enc_wanted_in, &p_encoder->fmt_in );
+    video_format_FixRgb( &p_enc_wanted_in->video ); /* set masks when RGB */
 
     es_format_Clean( &p_encoder->fmt_in );
     es_format_Clean( &p_encoder->fmt_out );
 
-    vlc_object_release( p_encoder );
+    vlc_object_delete(p_encoder);
 
     return p_module != NULL ? VLC_SUCCESS : VLC_EGENERIC;
 }
@@ -373,6 +403,31 @@ static void* EncoderThread( void *obj )
     return NULL;
 }
 
+int transcode_encoder_video_drain( transcode_encoder_t *p_enc, block_t **out )
+{
+    if( !p_enc->b_threaded )
+    {
+        block_t *p_block;
+        do {
+            p_block = transcode_encoder_encode( p_enc, NULL );
+            block_ChainAppend( out, p_block );
+        } while( p_block );
+    }
+    else
+    {
+        if( p_enc->b_threaded && !p_enc->b_abort )
+        {
+            vlc_mutex_lock( &p_enc->lock_out );
+            p_enc->b_abort = true;
+            vlc_cond_signal( &p_enc->cond );
+            vlc_mutex_unlock( &p_enc->lock_out );
+            vlc_join( p_enc->thread, NULL );
+        }
+        block_ChainAppend( out, transcode_encoder_get_output_async( p_enc ) );
+    }
+    return VLC_SUCCESS;
+}
+
 void transcode_encoder_video_close( transcode_encoder_t *p_enc )
 {
     if( p_enc->b_threaded && !p_enc->b_abort )
@@ -387,9 +442,6 @@ void transcode_encoder_video_close( transcode_encoder_t *p_enc )
     /* Close encoder */
     module_unneed( p_enc->p_encoder, p_enc->p_encoder->p_module );
     p_enc->p_encoder->p_module = NULL;
-
-    vlc_cond_destroy( &p_enc->cond );
-    vlc_sem_destroy( &p_enc->picture_pool_has_room );
 }
 
 int transcode_encoder_video_open( transcode_encoder_t *p_enc,
@@ -418,8 +470,6 @@ int transcode_encoder_video_open( transcode_encoder_t *p_enc,
     {
         if( vlc_clone( &p_enc->thread, EncoderThread, p_enc, p_cfg->video.threads.i_priority ) )
         {
-            vlc_cond_destroy( &p_enc->cond );
-            vlc_sem_destroy( &p_enc->picture_pool_has_room );
             module_unneed( p_enc->p_encoder, p_enc->p_encoder->p_module );
             p_enc->p_encoder->p_module = NULL;
             return VLC_EGENERIC;
@@ -436,14 +486,12 @@ block_t * transcode_encoder_video_encode( transcode_encoder_t *p_enc, picture_t 
     {
         return p_enc->p_encoder->pf_encode_video( p_enc->p_encoder, p_pic );
     }
-    else
-    {
-        vlc_sem_wait( &p_enc->picture_pool_has_room );
-        vlc_mutex_lock( &p_enc->lock_out );
-        picture_Hold( p_pic );
-        picture_fifo_Push( p_enc->pp_pics, p_pic );
-        vlc_cond_signal( &p_enc->cond );
-        vlc_mutex_unlock( &p_enc->lock_out );
-        return NULL;
-    }
+
+    vlc_sem_wait( &p_enc->picture_pool_has_room );
+    vlc_mutex_lock( &p_enc->lock_out );
+    picture_Hold( p_pic );
+    picture_fifo_Push( p_enc->pp_pics, p_pic );
+    vlc_cond_signal( &p_enc->cond );
+    vlc_mutex_unlock( &p_enc->lock_out );
+    return NULL;
 }

@@ -32,6 +32,8 @@
 #include <vlc_interrupt.h>
 #include <vlc_network.h>
 
+const char vlc_module_name[] = "test_interrupt";
+
 static vlc_sem_t sem;
 static int fds[2];
 
@@ -205,6 +207,5 @@ int main (void)
 
     vlc_close(fds[1]);
     vlc_close(fds[0]);
-    vlc_sem_destroy(&sem);
     return 0;
 }

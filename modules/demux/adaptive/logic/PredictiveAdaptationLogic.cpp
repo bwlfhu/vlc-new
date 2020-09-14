@@ -54,17 +54,15 @@ bool PredictiveStats::starting() const
     return (segments_count < 3) || !last_download_rate;
 }
 
-PredictiveAdaptationLogic::PredictiveAdaptationLogic(vlc_object_t *p_obj_)
-    : AbstractAdaptationLogic()
+PredictiveAdaptationLogic::PredictiveAdaptationLogic(vlc_object_t *obj)
+    : AbstractAdaptationLogic(obj)
 {
-    p_obj = p_obj_;
     usedBps = 0;
     vlc_mutex_init(&lock);
 }
 
 PredictiveAdaptationLogic::~PredictiveAdaptationLogic()
 {
-    vlc_mutex_destroy(&lock);
 }
 
 BaseRepresentation *PredictiveAdaptationLogic::getNextRepresentation(BaseAdaptationSet *adaptSet, BaseRepresentation *prevRep)

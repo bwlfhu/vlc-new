@@ -2,7 +2,6 @@
  * filter.cpp : DirectShow access module for vlc
  *****************************************************************************
  * Copyright (C) 2002-2010 VLC authors and VideoLAN
- * $Id$
  *
  * Author: Gildas Bazin <gbazin@videolan.org>
  *
@@ -179,6 +178,11 @@ int GetFourCCFromMediaType( const AM_MEDIA_TYPE &media_type )
             else if( media_type.subtype == MEDIASUBTYPE_MJPG )
                 i_fourcc = VLC_CODEC_MJPG;
 
+            else if( media_type.subtype == MEDIASUBTYPE_H264 ||
+                     media_type.subtype == MEDIASUBTYPE_h264 ||
+                     media_type.subtype == MEDIASUBTYPE_x264 ||
+                     media_type.subtype == MEDIASUBTYPE_X264 )
+                i_fourcc = VLC_CODEC_H264;
         }
     }
     else if( media_type.majortype == MEDIATYPE_Audio )

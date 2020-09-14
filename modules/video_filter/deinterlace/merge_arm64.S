@@ -21,6 +21,7 @@
 
 #include "../../arm_neon/asm.S"
 
+	.arch armv8-a+simd
 	.text
 
 #define	DEST	x0
@@ -31,6 +32,7 @@
 	.align 2
 	// NOTE: Offset and pitch must be multiple of 16-bytes in VLC.
 function merge8_arm64_neon
+	bti		c
 	ands		x5, SIZE, #~63
 	b.eq		2f
 	mov		x10, #64
@@ -67,6 +69,7 @@ function merge8_arm64_neon
 
 	.align 2
 function merge16_arm64_neon
+	bti		c
 	ands		x5, SIZE, #~63
 	b.eq		2f
 1:

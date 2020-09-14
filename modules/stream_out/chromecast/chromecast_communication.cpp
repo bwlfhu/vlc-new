@@ -28,23 +28,26 @@
 #endif
 
 #include "chromecast.h"
-#ifdef HAVE_POLL
+#ifdef HAVE_POLL_H
 # include <poll.h>
 #endif
 
 #include <iomanip>
 
-ChromecastCommunication::ChromecastCommunication( vlc_object_t* p_module, const char* targetIP, unsigned int devicePort )
+ChromecastCommunication::ChromecastCommunication( vlc_object_t* p_module,
+    std::string serverPath, unsigned int serverPort, const char* targetIP, unsigned int devicePort )
     : m_module( p_module )
     , m_creds( NULL )
     , m_tls( NULL )
     , m_receiver_requestId( 1 )
     , m_requestId( 1 )
+    , m_serverPath( serverPath )
+    , m_serverPort( serverPort )
 {
     if (devicePort == 0)
         devicePort = CHROMECAST_CONTROL_PORT;
 
-    m_creds = vlc_tls_ClientCreate( m_module->obj.parent );
+    m_creds = vlc_tls_ClientCreate( vlc_object_parent(m_module) );
     if (m_creds == NULL)
         throw std::runtime_error( "Failed to create TLS client" );
 
@@ -52,7 +55,7 @@ ChromecastCommunication::ChromecastCommunication( vlc_object_t* p_module, const 
                                    NULL, NULL );
     if (m_tls == NULL)
     {
-        vlc_tls_Delete(m_creds);
+        vlc_tls_ClientDelete(m_creds);
         throw std::runtime_error( "Failed to create client session" );
     }
 
@@ -73,7 +76,7 @@ void ChromecastCommunication::disconnect()
     if ( m_tls != NULL )
     {
         vlc_tls_Close(m_tls);
-        vlc_tls_Delete(m_creds);
+        vlc_tls_ClientDelete(m_creds);
         m_tls = NULL;
     }
 }
@@ -118,9 +121,6 @@ int ChromecastCommunication::buildMessage(const std::string & namespace_,
 ssize_t ChromecastCommunication::receive( uint8_t *p_data, size_t i_size, int i_timeout, bool *pb_timeout )
 {
     ssize_t i_received = 0;
-    struct pollfd ufd[1];
-    ufd[0].fd = vlc_tls_GetFD( m_tls );
-    ufd[0].events = POLLIN;
 
     struct iovec iov;
     iov.iov_base = p_data;
@@ -132,7 +132,7 @@ ssize_t ChromecastCommunication::receive( uint8_t *p_data, size_t i_size, int i_
      * connection as dead. */
     do
     {
-        ssize_t i_ret = m_tls->readv( m_tls, &iov, 1 );
+        ssize_t i_ret = m_tls->ops->readv( m_tls, &iov, 1 );
         if ( i_ret < 0 )
         {
 #ifdef _WIN32
@@ -143,6 +143,11 @@ ssize_t ChromecastCommunication::receive( uint8_t *p_data, size_t i_size, int i_
             {
                 return -1;
             }
+
+            struct pollfd ufd[1];
+            ufd[0].events = POLLIN;
+            ufd[0].fd = vlc_tls_GetPollFD( m_tls, &ufd[0].events );
+
             ssize_t val = vlc_poll_i11e(ufd, 1, i_timeout);
             if ( val < 0 )
                 return -1;
@@ -278,8 +283,7 @@ static std::string meta_get_escaped(const vlc_meta_t *p_meta, vlc_meta_type_t ty
     return escape_json(std::string(psz));
 }
 
-std::string ChromecastCommunication::GetMedia( unsigned int i_port,
-                                               const std::string& mime,
+std::string ChromecastCommunication::GetMedia( const std::string& mime,
                                                const vlc_meta_t *p_meta )
 {
     std::stringstream ss;
@@ -341,7 +345,7 @@ std::string ChromecastCommunication::GetMedia( unsigned int i_port,
     }
 
     std::stringstream chromecast_url;
-    chromecast_url << "http://" << m_serverIp << ":" << i_port << "/stream";
+    chromecast_url << "http://" << m_serverIp << ":" << m_serverPort << m_serverPath;
 
     msg_Dbg( m_module, "s_chromecast_url: %s", chromecast_url.str().c_str());
 
@@ -352,13 +356,13 @@ std::string ChromecastCommunication::GetMedia( unsigned int i_port,
     return ss.str();
 }
 
-unsigned ChromecastCommunication::msgPlayerLoad( const std::string& destinationId, unsigned int i_port,
+unsigned ChromecastCommunication::msgPlayerLoad( const std::string& destinationId,
                                              const std::string& mime, const vlc_meta_t *p_meta )
 {
     unsigned id = getNextRequestId();
     std::stringstream ss;
     ss << "{\"type\":\"LOAD\","
-       <<  "\"media\":{" << GetMedia( i_port, mime, p_meta ) << "},"
+       <<  "\"media\":{" << GetMedia( mime, p_meta ) << "},"
        <<  "\"autoplay\":\"false\","
        <<  "\"requestId\":" << id
        << "}";

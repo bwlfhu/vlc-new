@@ -2,7 +2,6 @@
  * win32_window.cpp
  *****************************************************************************
  * Copyright (C) 2003 the VideoLAN team
- * $Id$
  *
  * Authors: Cyril Deguet     <asmax@via.ecp.fr>
  *          Olivier Teulière <ipkiss@via.ecp.fr>
@@ -74,9 +73,6 @@ Win32Window::Win32Window( intf_thread_t *pIntf, GenericWindow &rWindow,
         m_hWnd = CreateWindowEx( WS_EX_APPWINDOW, vlc_class,
                                  vlc_name, WS_POPUP | WS_CLIPCHILDREN,
                                  0, 0, 0, 0, NULL, 0, hInst, NULL );
-
-        // Store with it a pointer to the interface thread
-        SetWindowLongPtr( m_hWnd, GWLP_USERDATA, (LONG_PTR)getIntf() );
     }
     else if( type == GenericWindow::FscWindow )
     {
@@ -91,9 +87,6 @@ Win32Window::Win32Window( intf_thread_t *pIntf, GenericWindow &rWindow,
         m_hWnd = CreateWindowEx( WS_EX_APPWINDOW, vlc_class, vlc_name,
                                  WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                                  0, 0, 0, 0, m_hWnd_parent, 0, hInst, NULL );
-
-        // Store with it a pointer to the interface thread
-        SetWindowLongPtr( m_hWnd, GWLP_USERDATA, (LONG_PTR)getIntf() );
     }
     else
     {
@@ -102,9 +95,6 @@ Win32Window::Win32Window( intf_thread_t *pIntf, GenericWindow &rWindow,
         m_hWnd = CreateWindowEx( 0, vlc_class, vlc_name,
                                  WS_POPUP | WS_CLIPCHILDREN,
                                  0, 0, 0, 0, hWnd_owner, 0, hInst, NULL );
-
-        // Store with it a pointer to the interface thread
-        SetWindowLongPtr( m_hWnd, GWLP_USERDATA, (LONG_PTR)getIntf() );
     }
 
     if( !m_hWnd )
@@ -112,6 +102,9 @@ Win32Window::Win32Window( intf_thread_t *pIntf, GenericWindow &rWindow,
         msg_Err( getIntf(), "CreateWindow failed" );
         return;
     }
+
+    // Store with it a pointer to the interface thread
+    SetWindowLongPtr( m_hWnd, GWLP_USERDATA, (LONG_PTR)getIntf() );
 
     // Store a pointer to the GenericWindow in a map
     pFactory->m_windowMap[m_hWnd] = &rWindow;

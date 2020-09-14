@@ -2,7 +2,6 @@
  * demux.c
  *****************************************************************************
  * Copyright (C) 1999-2004 VLC authors and VideoLAN
- * $Id$
  *
  * Author: Laurent Aimar <fenrir@via.ecp.fr>
  *
@@ -35,6 +34,7 @@
 #include <vlc_url.h>
 #include <vlc_modules.h>
 #include <vlc_strings.h>
+#include "input_internal.h"
 
 typedef const struct
 {
@@ -162,7 +162,7 @@ static void demux_DestroyDemux(demux_t *demux)
     vlc_stream_Delete(demux->s);
 }
 
-static int demux_Probe(void *func, va_list ap)
+static int demux_Probe(void *func, bool forced, va_list ap)
 {
     int (*probe)(vlc_object_t *) = func;
     demux_t *demux = va_arg(ap, demux_t *);
@@ -175,10 +175,15 @@ static int demux_Probe(void *func, va_list ap)
         return VLC_EGENERIC;
     }
 
-    return probe(VLC_OBJECT(demux));
+    demux->obj.force = forced;
+
+    int ret = probe(VLC_OBJECT(demux));
+    if (ret)
+        vlc_objres_clear(VLC_OBJECT(demux));
+    return ret;
 }
 
-demux_t *demux_NewAdvanced( vlc_object_t *p_obj, input_thread_t *p_parent_input,
+demux_t *demux_NewAdvanced( vlc_object_t *p_obj, input_thread_t *p_input,
                             const char *psz_demux, const char *url,
                             stream_t *s, es_out_t *out, bool b_preparsing )
 {
@@ -202,7 +207,7 @@ demux_t *demux_NewAdvanced( vlc_object_t *p_obj, input_thread_t *p_parent_input,
         }
     }
 
-    p_demux->p_input = p_parent_input;
+    p_demux->p_input_item = p_input ? input_GetItem(p_input) : NULL;
     p_demux->psz_name = strdup( psz_demux );
     if (unlikely(p_demux->psz_name == NULL))
         goto error;
@@ -274,7 +279,7 @@ int demux_vaControlHelper( stream_t *s,
 {
     int64_t i_tell;
     double  f, *pf;
-    int64_t i64, *pi64;
+    vlc_tick_t i64;
 
     if( i_end < 0 )    i_end   = stream_Size( s );
     if( i_start < 0 )  i_start = 0;
@@ -309,25 +314,23 @@ int demux_vaControlHelper( stream_t *s,
             return vlc_stream_vaControl( s, i_query, args );
 
         case DEMUX_GET_LENGTH:
-            pi64 = (int64_t*)va_arg( args, int64_t * );
             if( i_bitrate > 0 && i_end > i_start )
             {
-                *pi64 = INT64_C(8000000) * (i_end - i_start) / i_bitrate;
+                *va_arg( args, vlc_tick_t * ) = vlc_tick_from_samples((i_end - i_start) * 8, i_bitrate);
                 return VLC_SUCCESS;
             }
             return VLC_EGENERIC;
 
         case DEMUX_GET_TIME:
-            pi64 = (int64_t*)va_arg( args, int64_t * );
             if( i_bitrate > 0 && i_tell >= i_start )
             {
-                *pi64 = INT64_C(8000000) * (i_tell - i_start) / i_bitrate;
+                *va_arg( args, vlc_tick_t * ) = vlc_tick_from_samples((i_tell - i_start) * 8, i_bitrate);
                 return VLC_SUCCESS;
             }
             return VLC_EGENERIC;
 
         case DEMUX_GET_POSITION:
-            pf = (double*)va_arg( args, double * );
+            pf = va_arg( args, double * );
             if( i_start < i_end )
             {
                 *pf = (double)( i_tell - i_start ) /
@@ -335,10 +338,11 @@ int demux_vaControlHelper( stream_t *s,
                 return VLC_SUCCESS;
             }
             return VLC_EGENERIC;
-
+        case DEMUX_GET_NORMAL_TIME:
+            return VLC_EGENERIC;
 
         case DEMUX_SET_POSITION:
-            f = (double)va_arg( args, double );
+            f = va_arg( args, double );
             if( i_start < i_end && f >= 0.0 && f <= 1.0 )
             {
                 int64_t i_block = (f * ( i_end - i_start )) / i_align;
@@ -352,10 +356,10 @@ int demux_vaControlHelper( stream_t *s,
             return VLC_EGENERIC;
 
         case DEMUX_SET_TIME:
-            i64 = (int64_t)va_arg( args, int64_t );
+            i64 = va_arg( args, vlc_tick_t );
             if( i_bitrate > 0 && i64 >= 0 )
             {
-                int64_t i_block = i64 * i_bitrate / INT64_C(8000000) / i_align;
+                int64_t i_block = samples_from_vlc_tick( i64, i_bitrate ) / (8 * i_align);
                 if( vlc_stream_Seek( s, i_start + i_block * i_align ) )
                 {
                     return VLC_EGENERIC;
@@ -376,6 +380,7 @@ int demux_vaControlHelper( stream_t *s,
         case DEMUX_SET_GROUP_ALL:
         case DEMUX_SET_GROUP_LIST:
         case DEMUX_SET_ES:
+        case DEMUX_SET_ES_LIST:
         case DEMUX_GET_ATTACHMENTS:
         case DEMUX_CAN_RECORD:
         case DEMUX_TEST_AND_CLEAR_FLAGS:
@@ -428,7 +433,7 @@ decoder_t *demux_PacketizerNew( demux_t *p_demux, es_format_t *p_fmt, const char
     if( !p_packetizer->p_module )
     {
         es_format_Clean( p_fmt );
-        vlc_object_release( p_packetizer );
+        vlc_object_delete(p_packetizer);
         msg_Err( p_demux, "cannot find packetizer for %s", psz_msg );
         return NULL;
     }
@@ -444,7 +449,7 @@ void demux_PacketizerDestroy( decoder_t *p_packetizer )
     es_format_Clean( &p_packetizer->fmt_out );
     if( p_packetizer->p_description )
         vlc_meta_Delete( p_packetizer->p_description );
-    vlc_object_release( p_packetizer );
+    vlc_object_delete(p_packetizer);
 }
 
 unsigned demux_TestAndClearFlags( demux_t *p_demux, unsigned flags )
@@ -485,7 +490,7 @@ static demux_t *demux_FilterNew( demux_t *p_next, const char *p_name )
 
     priv = vlc_stream_Private(p_demux);
     p_demux->p_next       = p_next;
-    p_demux->p_input      = NULL;
+    p_demux->p_input_item = NULL;
     p_demux->p_sys        = NULL;
     p_demux->psz_name     = NULL;
     p_demux->psz_url      = NULL;

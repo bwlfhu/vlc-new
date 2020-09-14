@@ -25,8 +25,8 @@
 # include "config.h"
 #endif
 
-#include <vlc_vout_wrapper.h>
 #include "events.h"
+#include "common.h"
 
 #include <initguid.h>
 #include <propsys.h> /* stupid mingw headers don't include this */
@@ -34,10 +34,6 @@
 #include <sensorsapi.h>
 
 #include <new>
-
-#ifndef _MSC_VER
-DEFINE_PROPERTYKEY(SENSOR_DATA_TYPE_MAGNETOMETER_ACCURACY, 0x1637d8a2, 0x4248, 0x4275, 0x86, 0x5d, 0x55, 0x8d, 0xe8, 0x4a, 0xed, 0xfd, 22);
-#endif
 
 class SensorReceiver : public ISensorEvents
 {

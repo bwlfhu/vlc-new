@@ -74,12 +74,10 @@ int transcode_encoder_audio_open( transcode_encoder_t *p_enc,
     return ( p_enc->p_encoder->p_module ) ? VLC_SUCCESS: VLC_EGENERIC;
 }
 
-static int encoder_audio_configure( vlc_object_t *p_obj,
-                                    const transcode_encoder_config_t *p_cfg,
+static int encoder_audio_configure( const transcode_encoder_config_t *p_cfg,
                                     const audio_format_t *p_dec_out,
-                                    encoder_t *p_enc )
+                                    encoder_t *p_enc, bool b_keep_fmtin )
 {
-    VLC_UNUSED(p_obj);
     audio_format_t *p_enc_in = &p_enc->fmt_in.audio;
     audio_format_t *p_enc_out = &p_enc->fmt_out.audio;
 
@@ -107,8 +105,12 @@ static int encoder_audio_configure( vlc_object_t *p_obj,
     if( p_enc_out->i_channels >= ARRAY_SIZE(pi_channels_maps) )
         p_enc_out->i_channels = ARRAY_SIZE(pi_channels_maps) - 1;
 
-    p_enc_in->i_physical_channels =
     p_enc_out->i_physical_channels = pi_channels_maps[p_enc_out->i_channels];
+
+    if( b_keep_fmtin ) /* This is tested/wanted decoder fmtin */
+        return VLC_SUCCESS;
+
+    p_enc_in->i_physical_channels = p_enc_out->i_physical_channels;
 
     /* Initialization of encoder format structures */
     p_enc->fmt_in.i_codec = p_dec_out->i_format;
@@ -129,24 +131,20 @@ static int encoder_audio_configure( vlc_object_t *p_obj,
     return VLC_SUCCESS;
 }
 
-int transcode_encoder_audio_configure( vlc_object_t *p_obj,
-                                       const transcode_encoder_config_t *p_cfg,
+int transcode_encoder_audio_configure( const transcode_encoder_config_t *p_cfg,
                                        const audio_format_t *p_dec_out,
-                                       transcode_encoder_t *p_enc )
+                                       transcode_encoder_t *p_enc,
+                                       bool b_keep_fmtin )
 {
-    return encoder_audio_configure( p_obj, p_cfg, p_dec_out, p_enc->p_encoder );
+    return encoder_audio_configure( p_cfg, p_dec_out, p_enc->p_encoder, b_keep_fmtin );
 }
 
-int transcode_encoder_audio_test( vlc_object_t *p_obj,
+int transcode_encoder_audio_test( encoder_t *p_encoder,
                                   const transcode_encoder_config_t *p_cfg,
                                   const es_format_t *p_dec_out,
                                   vlc_fourcc_t i_codec_in,
                                   es_format_t *p_enc_wanted_in )
 {
-    encoder_t *p_encoder = sout_EncoderCreate( p_obj );
-    if( !p_encoder )
-        return VLC_EGENERIC;
-
     p_encoder->p_cfg = p_cfg->p_config_chain;
 
     es_format_Init( &p_encoder->fmt_in, AUDIO_ES, i_codec_in );
@@ -155,11 +153,11 @@ int transcode_encoder_audio_test( vlc_object_t *p_obj,
 
     audio_format_t *p_afmt_out = &p_encoder->fmt_out.audio;
 
-    if( encoder_audio_configure( p_obj, p_cfg, &p_dec_out->audio, p_encoder ) )
+    if( encoder_audio_configure( p_cfg, &p_dec_out->audio, p_encoder, false ) )
     {
         es_format_Clean( &p_encoder->fmt_in );
         es_format_Clean( &p_encoder->fmt_out );
-        vlc_object_release( p_encoder );
+        vlc_object_delete(p_encoder);
         return VLC_EGENERIC;
     }
 
@@ -174,7 +172,7 @@ int transcode_encoder_audio_test( vlc_object_t *p_obj,
     module_t *p_module = module_need( p_encoder, "encoder", p_cfg->psz_name, true );
     if( !p_module )
     {
-        msg_Err( p_obj, "cannot find audio encoder (module:%s fourcc:%4.4s). "
+        msg_Err( p_encoder, "cannot find audio encoder (module:%s fourcc:%4.4s). "
                            "Take a look few lines earlier to see possible reason.",
                            p_cfg->psz_name ? p_cfg->psz_name : "any",
                            (char *)&p_cfg->i_codec );
@@ -186,13 +184,15 @@ int transcode_encoder_audio_test( vlc_object_t *p_obj,
         module_unneed( p_encoder, p_module );
     }
 
+    p_encoder->fmt_in.audio.i_format = p_encoder->fmt_in.i_codec;
+
     /* copy our requested format */
     es_format_Copy( p_enc_wanted_in, &p_encoder->fmt_in );
 
     es_format_Clean( &p_encoder->fmt_in );
     es_format_Clean( &p_encoder->fmt_out );
 
-    vlc_object_release( p_encoder );
+    vlc_object_delete(p_encoder);
 
     return p_module != NULL ? VLC_SUCCESS : VLC_EGENERIC;
 }
@@ -200,4 +200,14 @@ int transcode_encoder_audio_test( vlc_object_t *p_obj,
 block_t * transcode_encoder_audio_encode( transcode_encoder_t *p_enc, block_t *p_block )
 {
     return p_enc->p_encoder->pf_encode_audio( p_enc->p_encoder, p_block );
+}
+
+int transcode_encoder_audio_drain( transcode_encoder_t *p_enc, block_t **out )
+{
+    block_t *p_block;
+    do {
+        p_block = transcode_encoder_audio_encode( p_enc, NULL );
+        block_ChainAppend( out, p_block );
+    } while( p_block );
+    return VLC_SUCCESS;
 }

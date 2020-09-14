@@ -7,8 +7,15 @@ LIBVLC_SAMPLES = \
 	libvlc/QtPlayer/player.cpp \
 	libvlc/QtPlayer/player.h \
 	libvlc/QtPlayer/QtVLC.pro \
+	libvlc/QtGL/main.cpp \
+	libvlc/QtGL/qtvlcwidget.cpp \
+	libvlc/QtGL/qtvlcwidget.h \
+	libvlc/QtGL/QtGl.pro \
 	libvlc/vlc-thumb.c \
 	libvlc/wx_player.cpp \
+	libvlc/d3d11_player.cpp \
+	libvlc/d3d9_player.c \
+	libvlc/win_player.c \
 	$(NULL)
 
 nobase_doc_DATA = $(LIBVLC_SAMPLES)
@@ -38,6 +45,7 @@ CHANGELOGS = \
 	ChangeLog-2016 \
 	ChangeLog-2017 \
 	ChangeLog-2018 \
+	ChangeLog-2019 \
 	$(NULL)
 
 man1_MANS = \
@@ -74,7 +82,7 @@ doc: Doxyfile
 	doxygen
 
 $(CHANGELOGS): Makefile.am
-	if test -d "$(top_srcdir)/.git"; then \
+	if test -e "$(top_srcdir)/.git"; then \
 		y="$@"; y="$${y##ChangeLog-}" ; \
 		git --git-dir="$(top_srcdir)/.git" log \
 			--since="$$y-01-01" \

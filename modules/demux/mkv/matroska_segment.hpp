@@ -2,7 +2,6 @@
  * matroska_segment.hpp : matroska demuxer
  *****************************************************************************
  * Copyright (C) 2003-2004 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Steve Lhomme <steve.lhomme@free.fr>
@@ -146,7 +145,8 @@ public:
 
     bool Seek( demux_t &, vlc_tick_t i_mk_date, vlc_tick_t i_mk_time_offset, bool b_accurate );
 
-    int BlockGet( KaxBlock * &, KaxSimpleBlock * &, bool *, bool *, int64_t *);
+    int BlockGet( KaxBlock * &, KaxSimpleBlock * &, KaxBlockAdditions * &,
+                  bool *, bool *, int64_t *);
 
     mkv_track_t * FindTrackByBlock(const KaxBlock *, const KaxSimpleBlock * );
 

@@ -5,7 +5,9 @@ PROJECTM_URL := $(SF)/projectm/$(PROJECTM_VERSION)/projectM-$(PROJECTM_VERSION)-
 ifdef HAVE_WIN32
 ifneq ($(ARCH),arm)
 ifneq ($(ARCH),aarch64)
+ifndef HAVE_WINSTORE
 PKGS += projectM
+endif
 endif
 endif
 endif
@@ -33,7 +35,7 @@ endif
 DEPS_projectM = glew $(DEPS_glew)
 
 .projectM: projectM toolchain.cmake
-	-cd $< && rm CMakeCache.txt
+	cd $< && rm -f CMakeCache.txt
 	cd $< && $(HOSTVARS) $(CMAKE) \
 		-DINCLUDE-PROJECTM-LIBVISUAL:BOOL=OFF \
 		-DDISABLE_NATIVE_PRESETS:BOOL=ON \

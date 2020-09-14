@@ -29,7 +29,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#ifdef HAVE_POLL
+#ifdef HAVE_POLL_H
 # include <poll.h>
 #endif
 
@@ -42,6 +42,7 @@
 #include <vlc_keystore.h>
 #include <vlc_interrupt.h>
 #include <vlc_network.h>
+#include <vlc_memstream.h>
 
 #include <smb2/smb2.h>
 #include <smb2/libsmb2.h>
@@ -57,8 +58,6 @@
 #endif
 
 #include "smb_common.h"
-
-#define CIFS_PORT 445
 
 static int Open(vlc_object_t *);
 static void Close(vlc_object_t *);
@@ -105,17 +104,8 @@ smb2_check_status(stream_t *access, int status, const char *psz_func)
 
     if (status < 0)
     {
-        if (status != -EINTR)
-        {
-            const char *psz_error = vlc_strerror_c(-status);
-            msg_Err(access, "%s failed: %d, '%s'", psz_func, status, psz_error);
-            if (sys->error_status == 0)
-                vlc_dialog_display_error(access,
-                                         _("SMB2 operation failed"), "%s",
-                                         psz_error);
-        }
-        else
-            msg_Warn(access, "%s interrupted", psz_func);
+        const char *psz_error = smb2_get_error(sys->smb2);
+        msg_Warn(access, "%s failed: %d, '%s'", psz_func, status, psz_error);
         sys->error_status = status;
         return -1;
     }
@@ -127,36 +117,46 @@ smb2_check_status(stream_t *access, int status, const char *psz_func)
 }
 
 static void
-smb2_set_generic_error(stream_t *access, const char *psz_func)
+smb2_set_error(stream_t *access, const char *psz_func, int err)
 {
     struct access_sys *sys = access->p_sys;
 
-    msg_Err(access, "%s failed: %s", psz_func, smb2_get_error(sys->smb2));
-    sys->error_status = 1;
+    msg_Err(access, "%s failed: %d, %s", psz_func, err,
+            smb2_get_error(sys->smb2));
+    sys->error_status = err;
 }
 
 #define VLC_SMB2_CHECK_STATUS(access, status) \
     smb2_check_status(access, status, __func__)
 
-#define VLC_SMB2_SET_GENERIC_ERROR(access, func) \
-    smb2_set_generic_error(access, func)
+#define VLC_SMB2_SET_ERROR(access, func, err) \
+    smb2_set_error(access, func, err)
 
 #define VLC_SMB2_STATUS_DENIED(x) (x == -ECONNREFUSED || x == -EACCES)
 
 static int
 vlc_smb2_mainloop(stream_t *access, bool teardown)
 {
+#define TEARDOWN_TIMEOUT 250 /* in ms */
     struct access_sys *sys = access->p_sys;
 
     int timeout = -1;
     int (*poll_func)(struct pollfd *, unsigned, int) = vlc_poll_i11e;
 
-    if (teardown && vlc_killed())
+    /* vlc_smb2_mainloop() can be called to clean-up after an error, but this
+     * function can override the error_status (from async cbs). Therefore,
+     * store the original error_status in order to restore it at the end of
+     * this call (since we want to keep the first and original error status). */
+    int original_error_status = sys->error_status;
+
+    if (teardown)
     {
-        /* The thread is interrupted, so vlc_poll_i11e will return immediatly.
-         * Use poll() with a timeout instead for tear down. */
-        timeout = 500;
+        /* Don't use vlc_poll_i11e that will return immediately with the EINTR
+         * errno if VLC's input is interrupted. Use the posix poll with a
+         * timeout to let a chance for a clean teardown. */
+        timeout = TEARDOWN_TIMEOUT;
         poll_func = (void *)poll;
+        sys->error_status = 0;
     }
 
     sys->res_done = false;
@@ -170,16 +170,36 @@ vlc_smb2_mainloop(stream_t *access, bool teardown)
         if (p_fds[0].fd == -1 || (ret = poll_func(p_fds, 1, timeout)) < 0)
         {
             if (errno == EINTR)
+            {
                 msg_Warn(access, "vlc_poll_i11e interrupted");
+                if (poll_func != (void *) poll)
+                {
+                    /* Try again with a timeout to let the command complete.
+                     * Indeed, if this command is interrupted, every future
+                     * commands will fail and we won't be able to teardown. */
+                    timeout = TEARDOWN_TIMEOUT;
+                    poll_func = (void *) poll;
+                }
+                else
+                    sys->error_status = -errno;
+            }
             else
+            {
                 msg_Err(access, "vlc_poll_i11e failed");
-            sys->error_status = -errno;
+                sys->error_status = -errno;
+            }
         }
+        else if (ret == 0)
+            sys->error_status = -ETIMEDOUT;
         else if (ret > 0 && p_fds[0].revents
              && smb2_service(sys->smb2, p_fds[0].revents) < 0)
-            VLC_SMB2_SET_GENERIC_ERROR(access, "smb2_service");
+            VLC_SMB2_SET_ERROR(access, "smb2_service", 1);
     }
-    return sys->error_status == 0 ? 0 : -1;
+
+    int ret = sys->error_status == 0 ? 0 : -1;
+    if (original_error_status != 0)
+        sys->error_status = original_error_status;
+    return ret;
 }
 
 #define VLC_SMB2_GENERIC_CB() \
@@ -222,11 +242,17 @@ FileRead(stream_t *access, void *buf, size_t len)
     if (sys->eof)
         return 0;
 
+    /* Limit the read size since smb2_read_async() will complete only after
+     * reading the whole requested data and not when whatever data is available
+     * (high read size means a faster I/O but a higher latency). */
+    if (len > 262144)
+        len = 262144;
+
     sys->res.read.len = 0;
     if (smb2_read_async(sys->smb2, sys->smb2fh, buf, len,
                         smb2_read_cb, access) < 0)
     {
-        VLC_SMB2_SET_GENERIC_ERROR(access, "smb2_read_async");
+        VLC_SMB2_SET_ERROR(access, "smb2_read_async", 1);
         return -1;
     }
 
@@ -246,7 +272,7 @@ FileSeek(stream_t *access, uint64_t i_pos)
 
     if (smb2_lseek(sys->smb2, sys->smb2fh, i_pos, SEEK_SET, NULL) < 0)
     {
-        VLC_SMB2_SET_GENERIC_ERROR(access, "smb2_seek_async");
+        VLC_SMB2_SET_ERROR(access, "smb2_seek_async", 1);
         return VLC_EGENERIC;
     }
     sys->eof = false;
@@ -297,18 +323,34 @@ FileControl(stream_t *access, int i_query, va_list args)
 static char *
 vlc_smb2_get_url(vlc_url_t *url, const char *file)
 {
-    /* smb2://<psz_host><psz_path><file>?<psz_option> */
-    char *buf;
-    if (asprintf(&buf, "smb://%s%s%s%s%s%s", url->psz_host,
-                 url->psz_path != NULL ? url->psz_path : "",
-                 url->psz_path != NULL && url->psz_path[0] != '\0' &&
-                 url->psz_path[strlen(url->psz_path) - 1] != '/' ? "/" : "",
-                 file,
-                 url->psz_option != NULL ? "?" : "",
-                 url->psz_option != NULL ? url->psz_option : "") == -1)
-        return NULL;
+    /* smb2://<psz_host><i_port><psz_path><file>?<psz_option> */
+    struct vlc_memstream buf;
+    vlc_memstream_open(&buf);
+    if (strchr(url->psz_host, ':') != NULL)
+        vlc_memstream_printf(&buf, "smb://[%s]", url->psz_host);
     else
-        return buf;
+        vlc_memstream_printf(&buf, "smb://%s", url->psz_host);
+
+    if (url->i_port != 0)
+        vlc_memstream_printf(&buf, ":%d", url->i_port);
+
+    if (url->psz_path != NULL)
+    {
+        vlc_memstream_puts(&buf, url->psz_path);
+        if (url->psz_path[0] != '\0' && url->psz_path[strlen(url->psz_path) - 1] != '/')
+            vlc_memstream_putc(&buf, '/');
+    }
+    else
+        vlc_memstream_putc(&buf, '/');
+
+    vlc_memstream_puts(&buf, file);
+
+    if (url->psz_option)
+        vlc_memstream_printf(&buf, "?%s", url->psz_option);
+
+    if (vlc_memstream_close(&buf))
+        return NULL;
+    return buf.ptr;
 }
 
 static int AddItem(stream_t *access, struct vlc_readdir_helper *rdh,
@@ -403,7 +445,7 @@ vlc_smb2_close_fh(stream_t *access)
 
     if (smb2_close_async(sys->smb2, sys->smb2fh, smb2_generic_cb, access) < 0)
     {
-        VLC_SMB2_SET_GENERIC_ERROR(access, "smb2_close_async");
+        VLC_SMB2_SET_ERROR(access, "smb2_close_async", 1);
         return -1;
     }
 
@@ -422,7 +464,7 @@ vlc_smb2_disconnect_share(stream_t *access)
 
     if (smb2_disconnect_share_async(sys->smb2, smb2_generic_cb, access) < 0)
     {
-        VLC_SMB2_SET_GENERIC_ERROR(access, "smb2_connect_share_async");
+        VLC_SMB2_SET_ERROR(access, "smb2_connect_share_async", 1);
         return -1;
     }
 
@@ -473,16 +515,18 @@ vlc_smb2_open_share(stream_t *access, const struct smb2_url *smb2_url,
     if (!username)
     {
         username = "Guest";
-        password = "";
+        /* A NULL password enable ntlmssp anonymous login */
+        password = NULL;
     }
 
     smb2_set_password(sys->smb2, password);
     smb2_set_domain(sys->smb2, domain ? domain : "");
 
-    if (smb2_connect_share_async(sys->smb2, smb2_url->server, share,
-                                 username, smb2_generic_cb, access) < 0)
+    int err = smb2_connect_share_async(sys->smb2, smb2_url->server, share,
+                                       username, smb2_generic_cb, access);
+    if (err < 0)
     {
-        VLC_SMB2_SET_GENERIC_ERROR(access, "smb2_connect_share_async");
+        VLC_SMB2_SET_ERROR(access, "smb2_connect_share_async", err);
         goto error;
     }
     if (vlc_smb2_mainloop(access, false) != 0)
@@ -497,7 +541,7 @@ vlc_smb2_open_share(stream_t *access, const struct smb2_url *smb2_url,
         struct smb2_stat_64 smb2_stat;
         if (smb2_stat_async(sys->smb2, smb2_url->path, &smb2_stat,
                             smb2_generic_cb, access) < 0)
-            VLC_SMB2_SET_GENERIC_ERROR(access, "smb2_stat_async");
+            VLC_SMB2_SET_ERROR(access, "smb2_stat_async", 1);
 
         if (vlc_smb2_mainloop(access, false) != 0)
             goto error;
@@ -521,7 +565,7 @@ vlc_smb2_open_share(stream_t *access, const struct smb2_url *smb2_url,
 
     if (ret < 0)
     {
-        VLC_SMB2_SET_GENERIC_ERROR(access, "smb2_open*_async");
+        VLC_SMB2_SET_ERROR(access, "smb2_open*_async", 1);
         goto error;
     }
 
@@ -534,48 +578,45 @@ error:
     return -1;
 }
 
-static int
-vlc_smb2_resolve(stream_t *access, char **host, unsigned port)
+static char *
+vlc_smb2_resolve(stream_t *access, const char *host, unsigned port)
 {
     (void) access;
-    if (!*host)
-        return -1;
+    if (!host)
+        return NULL;
 
 #ifdef HAVE_DSM
     /* Test if the host is an IP */
     struct in_addr addr;
-    if (inet_pton(AF_INET, *host, &addr) == 1)
-        return 0;
+    if (inet_pton(AF_INET, host, &addr) == 1)
+        return NULL;
 
     /* Test if the host can be resolved */
     struct addrinfo *info = NULL;
-    if (vlc_getaddrinfo_i11e(*host, port, NULL, &info) == 0)
+    if (vlc_getaddrinfo_i11e(host, port, NULL, &info) == 0)
     {
         freeaddrinfo(info);
         /* Let smb2 resolve it */
-        return 0;
+        return NULL;
     }
 
     /* Test if the host is a netbios name */
+    char *out_host = NULL;
     netbios_ns *ns = netbios_ns_new();
+    if (!ns)
+        return NULL;
     uint32_t ip4_addr;
-    int ret = -1;
-    if (netbios_ns_resolve(ns, *host, NETBIOS_FILESERVER, &ip4_addr) == 0)
+    if (netbios_ns_resolve(ns, host, NETBIOS_FILESERVER, &ip4_addr) == 0)
     {
         char ip[] = "xxx.xxx.xxx.xxx";
         if (inet_ntop(AF_INET, &ip4_addr, ip, sizeof(ip)))
-        {
-            free(*host);
-            *host = strdup(ip);
-            if (*host)
-                ret = 0;
-        }
+            out_host = strdup(ip);
     }
     netbios_ns_destroy(ns);
-    return ret;
+    return out_host;
 #else
     (void) port;
-    return 0;
+    return NULL;
 #endif
 }
 
@@ -595,16 +636,6 @@ Open(vlc_object_t *p_obj)
     if (vlc_UrlParseFixup(&sys->encoded_url, access->psz_url) != 0)
         return VLC_ENOMEM;
 
-    if (sys->encoded_url.i_port != 0 && sys->encoded_url.i_port != CIFS_PORT)
-        goto error;
-    sys->encoded_url.i_port = 0;
-
-    if (vlc_smb2_resolve(access, &sys->encoded_url.psz_host, CIFS_PORT))
-        goto error;
-
-    if (sys->encoded_url.psz_path == NULL)
-        sys->encoded_url.psz_path = (char *) "/";
-
     sys->smb2 = smb2_init_context();
     if (sys->smb2 == NULL)
     {
@@ -612,9 +643,26 @@ Open(vlc_object_t *p_obj)
         goto error;
     }
 
+    smb2_set_security_mode(sys->smb2, SMB2_NEGOTIATE_SIGNING_ENABLED);
+
+    if (sys->encoded_url.psz_path == NULL)
+        sys->encoded_url.psz_path = (char *) "/";
+
+    char *resolved_host = vlc_smb2_resolve(access, sys->encoded_url.psz_host,
+                                           sys->encoded_url.i_port);
+
     /* smb2_* functions need a decoded url. Re compose the url from the
-     * modified sys->encoded_url (without port and with the resolved host). */
-    char *url = vlc_uri_compose(&sys->encoded_url);
+     * modified sys->encoded_url (with the resolved host). */
+    char *url;
+    if (resolved_host != NULL)
+    {
+        vlc_url_t resolved_url = sys->encoded_url;
+        resolved_url.psz_host = resolved_host;
+        url = vlc_uri_compose(&resolved_url);
+        free(resolved_host);
+    }
+    else
+        url = vlc_uri_compose(&sys->encoded_url);
     if (!vlc_uri_decode(url))
     {
         free(url);
@@ -649,13 +697,26 @@ Open(vlc_object_t *p_obj)
     {
         sys->error_status = 0;
         ret = vlc_smb2_open_share(access, smb2_url, &credential);
-        if (ret == 0)
-            vlc_credential_store(&credential, access);
     }
+    if (ret == 0)
+        vlc_credential_store(&credential, access);
     vlc_credential_clean(&credential);
 
     if (ret != 0)
+    {
+        const char *error = smb2_get_error(sys->smb2);
+        if (error && *error)
+            vlc_dialog_display_error(access,
+                                     _("SMB2 operation failed"), "%s", error);
+        if (credential.i_get_order == GET_FROM_DIALOG)
+        {
+            /* Tell other smb modules (likely dsm) that we already requested
+             * credential to the users and that it it useless to try again.
+             * This avoid to show 2 login dialogs for the same access. */
+            var_Create(access, "smb-dialog-failed", VLC_VAR_VOID);
+        }
         goto error;
+    }
 
     if (sys->smb2fh != NULL)
     {
@@ -692,7 +753,14 @@ error:
     }
     vlc_UrlClean(&sys->encoded_url);
     free(var_domain);
-    return VLC_EGENERIC;
+
+    /* Returning VLC_ETIMEOUT will stop the module probe and prevent to load
+     * the next smb module. The smb2 module can return this specific error in
+     * case of network error (EIO) or when the user asked to cancel it
+     * (vlc_killed()). Indeed, in these cases, it is useless to try next smb
+     * modules. */
+    return vlc_killed() || sys->error_status == -EIO ? VLC_ETIMEOUT
+         : VLC_EGENERIC;
 }
 
 static void

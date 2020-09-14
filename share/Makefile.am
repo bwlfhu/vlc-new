@@ -5,7 +5,7 @@ EXTRA_DIST =
 desktopdir = $(datadir)/applications
 if !HAVE_WIN32
 if !HAVE_DARWIN
-desktop_DATA = vlc.desktop
+desktop_DATA = vlc.desktop vlc-openbd.desktop vlc-opendvd.desktop vlc-openvcd.desktop vlc-opencda.desktop
 appdatadir = $(datarootdir)/metainfo
 appdata_DATA = $(appdata_in_files:.xml.in=.xml)
 appdata_in_files = vlc.appdata.xml.in
@@ -13,9 +13,10 @@ endif
 endif
 
 EXTRA_DIST += vlc.desktop.in vlc.desktop.mimetypes
+EXTRA_DIST += vlc-openbd.desktop.in vlc-opendvd.desktop.in vlc-openvcd.desktop.in vlc-opencda.desktop.in
 CLEANFILES += $(desktop_DATA) $(appdata_DATA)
 
-vlc.desktop: vlc.desktop.in $(top_builddir)/config.status
+%.desktop: %.desktop.in $(top_builddir)/config.status
 	$(AM_V_GEN)mimetypes="$$(sed 's/\s*#.*$$//g' $(srcdir)/vlc.desktop.mimetypes | egrep -v '^$$' | tr "\n" ';')"; \
 	sed \
 		-e 's,\@bindir\@,$(bindir),g' \
@@ -92,8 +93,11 @@ skins2_default_vlt_FILES = \
 skins2/default.vlt: $(skins2_default_vlt_FILES)
 	$(AM_V_at)mkdir -p skins2
 	$(AM_V_at)rm -f -- skins2/default.vlt.tmp
-	$(AM_V_GEN)GZIP=--no-name \
+	$(AM_V_GEN)tarsort= ; \
+	tar --help|grep -q sort=ORDER && tarsort=--sort=name ; \
+	GZIP=--no-name \
 	tar cvvzf skins2/default.vlt.tmp \
+		--format=ustar $$tarsort \
 		--owner=root --group=root --directory="$(srcdir)/skins2" \
 		default/
 	$(AM_V_at)mv -f -- skins2/default.vlt.tmp skins2/default.vlt
@@ -214,6 +218,8 @@ nobase_dist_pkgdata_DATA += \
 	lua/http/requests/vlm_cmd.xml \
 	lua/http/requests/status.xml \
 	lua/http/requests/status.json \
+	lua/http/requests/rd.json \
+	lua/http/requests/rd.xml \
 	lua/http/requests/vlm.xml \
 	lua/http/index.html \
 	lua/http/css/ui-lightness/jquery-ui-1.8.13.custom.css \
@@ -302,3 +308,6 @@ DIST_solid = \
 	solid/vlc-opencda.desktop \
 	solid/vlc-opendvd.desktop \
 	solid/vlc-openvcd.desktop
+
+EXTRA_DIST += \
+        hrtfs/dodeca_and_7channel_3DSL_HRTF.sofa

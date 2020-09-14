@@ -3,7 +3,6 @@
  *****************************************************************************
  * Copyright (C) 2005-2009 VLC authors and VideoLAN
  * Copyright (C) 2013      Vianney Boyer
- * $Id$
  *
  * Authors: Antoine Cellerier <dionoea -at- videolan -dot- org>
  *          Vianney Boyer <vlcvboyer -at- gmail -dot- com>
@@ -71,10 +70,10 @@
 #define ROTATION_TEXT N_("Rotation")
 #define ROTATION_LONGTEXT N_("Rotation parameter: none;180;90-270;mirror")
 
-const int pi_mode_values[] = { (int) 0, (int) 1, (int) 2, (int) 3 };
-const char *const ppsz_mode_descriptions[] = { N_("jigsaw puzzle"), N_("sliding puzzle"), N_("swap puzzle"), N_("exchange puzzle") };
-const int pi_rotation_values[] = { (int) 0, (int) 1, (int) 2, (int) 3 };
-const char *const ppsz_rotation_descriptions[] = { N_("0"), N_("0/180"), N_("0/90/180/270"), N_("0/90/180/270/mirror") };
+static const int pi_mode_values[] = { (int) 0, (int) 1, (int) 2, (int) 3 };
+static const char *const ppsz_mode_descriptions[] = { N_("jigsaw puzzle"), N_("sliding puzzle"), N_("swap puzzle"), N_("exchange puzzle") };
+static const int pi_rotation_values[] = { (int) 0, (int) 1, (int) 2, (int) 3 };
+static const char *const ppsz_rotation_descriptions[] = { N_("0"), N_("0/180"), N_("0/90/180/270"), N_("0/90/180/270/mirror") };
 
 #define CFG_PREFIX "puzzle-"
 
@@ -226,9 +225,6 @@ static void Close( vlc_object_t *p_this ) {
     var_DelCallback( p_filter, CFG_PREFIX "auto-solve",    puzzle_Callback, p_sys );
     var_DelCallback( p_filter, CFG_PREFIX "rotation",      puzzle_Callback, p_sys );
     var_DelCallback( p_filter, CFG_PREFIX "mode",          puzzle_Callback, p_sys );
-
-    vlc_mutex_destroy( &p_sys->lock );
-    vlc_mutex_destroy( &p_sys->pce_lock );
 
     /* Free allocated memory */
     puzzle_free_ps_puzzle_array ( p_filter );
@@ -628,8 +624,8 @@ int puzzle_Callback( vlc_object_t *p_this, char const *psz_var,
 }
 
 /* mouse callback */
-int puzzle_mouse( filter_t *p_filter, vlc_mouse_t *p_mouse,
-                  const vlc_mouse_t *p_old, const vlc_mouse_t *p_new )
+int puzzle_mouse( filter_t *p_filter, vlc_mouse_t *p_new,
+                  const vlc_mouse_t *p_old )
 {
     filter_sys_t *p_sys = p_filter->p_sys;
     const video_format_t  *p_fmt_in = &p_filter->fmt_in.video;
@@ -640,7 +636,6 @@ int puzzle_mouse( filter_t *p_filter, vlc_mouse_t *p_mouse,
         return VLC_EGENERIC;
 
     if (! p_sys->b_init || p_sys->b_change_param) {
-        *p_mouse = *p_new;
         return VLC_SUCCESS;
     }
 
@@ -660,7 +655,6 @@ int puzzle_mouse( filter_t *p_filter, vlc_mouse_t *p_mouse,
         else
         {
             /* otherwise we can forward the mouse */
-            *p_mouse = *p_new;
             return VLC_SUCCESS;
         }
     }
@@ -683,7 +677,6 @@ int puzzle_mouse( filter_t *p_filter, vlc_mouse_t *p_mouse,
             /* do not take into account if border clicked */
             if ((p_new->i_x <= i_border_width) || (p_new->i_y <=  i_border_height) || (p_new->i_x >= (int) p_fmt_in->i_width -  i_border_width) || (p_new->i_y >= (int) p_fmt_in->i_height -  i_border_height ) )
             {
-                *p_mouse = *p_new;
                 return VLC_SUCCESS;
             }
             else if( p_sys->i_selected == NO_PCE )
@@ -744,7 +737,6 @@ int puzzle_mouse( filter_t *p_filter, vlc_mouse_t *p_mouse,
     else /* jigsaw puzzle mode */
     {
         if ((p_sys->ps_desk_planes == NULL)  || (p_sys->ps_pict_planes == NULL)  || (p_sys->ps_puzzle_array == NULL) || (p_sys->ps_pieces == NULL)) {
-            *p_mouse = *p_new;
             return VLC_SUCCESS;
         }
 

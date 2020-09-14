@@ -30,8 +30,7 @@
 /** @struct input_clock_t
  * This structure is used to manage clock drift and reception jitters
  *
- * XXX input_clock_ConvertTS can be called from any threads. All others functions
- * MUST be called from one and only one thread.
+ * All functions MUST be called from one and only one thread.
  */
 typedef struct input_clock_t input_clock_t;
 
@@ -39,7 +38,7 @@ typedef struct input_clock_t input_clock_t;
  * This function creates a new input_clock_t.
  * You must use input_clock_Delete to delete it once unused.
  */
-input_clock_t *input_clock_New( int i_rate );
+input_clock_t *input_clock_New( float rate );
 
 /**
  * This function destroys a input_clock_t created by input_clock_New.
@@ -52,9 +51,9 @@ void           input_clock_Delete( input_clock_t * );
  *
  * \param b_buffering_allowed tells if we are allowed to bufferize more data in
  * advanced (if possible).
+ * \return clock update delay
  */
-void    input_clock_Update( input_clock_t *, vlc_object_t *p_log,
-                            bool *pb_late,
+vlc_tick_t input_clock_Update( input_clock_t *, vlc_object_t *p_log,
                             bool b_can_pace_control, bool b_buffering_allowed,
                             vlc_tick_t i_clock, vlc_tick_t i_system );
 /**
@@ -72,7 +71,7 @@ vlc_tick_t input_clock_GetWakeup( input_clock_t * );
 /**
  * This functions allows changing the actual reading speed.
  */
-void    input_clock_ChangeRate( input_clock_t *, int i_rate );
+void    input_clock_ChangeRate( input_clock_t *, float rate );
 
 /**
  * This function allows changing the pause status.
@@ -94,26 +93,9 @@ void    input_clock_GetSystemOrigin( input_clock_t *, vlc_tick_t *pi_system, vlc
 void    input_clock_ChangeSystemOrigin( input_clock_t *, bool b_absolute, vlc_tick_t i_system );
 
 /**
- * This function converts a pair of timestamp from stream clock to system clock.
- *
- * If pi_rate is provided it will be filled with the rate value used for
- * the conversion.
- * p_ts0 is a pointer to a timestamp to be converted (in place) and must be non NULL.
- * p_ts1 is a pointer to a timestamp to be converted (in place) and can be NULL.
- *
- * It will return VLC_EGENERIC if i_ts_bound is not INT64_MAX and if the value *p_ts0
- * after conversion is not before the deadline vlc_tick_now() + i_pts_delay + i_ts_bound.
- * It will also return VLC_EGENERIC if the conversion cannot be done successfully. In
- * this case, *p_ts0 and *p_ts1 will hold an invalid timestamp.
- * Otherwise it will return VLC_SUCCESS.
- */
-int input_clock_ConvertTS( vlc_object_t *, input_clock_t *, int *pi_rate,
-                           vlc_tick_t *pi_ts0, vlc_tick_t *pi_ts1, vlc_tick_t i_ts_bound );
-
-/**
  * This function returns the current rate.
  */
-int input_clock_GetRate( input_clock_t * );
+float input_clock_GetRate( input_clock_t * );
 
 /**
  * This function returns current clock state or VLC_EGENERIC if there is not a

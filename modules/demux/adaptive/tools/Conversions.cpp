@@ -35,10 +35,10 @@
 
   Exemple input string: "PT0H9M56.46S"
  */
-static time_t str_duration( const char *psz_duration )
+static vlc_tick_t str_duration( const char *psz_duration )
 {
     bool        timeDesignatorReached = false;
-    time_t      res = 0;
+    vlc_tick_t  res = 0;
     char*       end_ptr;
 
     if ( psz_duration == NULL )
@@ -79,7 +79,7 @@ static time_t str_duration( const char *psz_duration )
             default:
                 break ;
         }
-        res += (time_t)(mul * number);
+        res += vlc_tick_from_sec(mul * number);
         if ( *psz_duration )
             psz_duration++;
     } while ( *psz_duration );
@@ -91,7 +91,7 @@ IsoTime::IsoTime(const std::string &str)
     time = str_duration(str.c_str());
 }
 
-IsoTime::operator time_t () const
+IsoTime::operator vlc_tick_t () const
 {
     return time;
 }
@@ -149,29 +149,29 @@ UTCTime::UTCTime(const std::string &str)
             }
         }
 
-        struct tm tm;
+        if (!in.fail() && !in.bad()) {
+            struct tm tm;
 
-        tm.tm_year = values[UTCTIME_YEAR] - 1900;
-        tm.tm_mon = values[UTCTIME_MON] - 1;
-        tm.tm_mday = values[UTCTIME_DAY];
-        tm.tm_hour = values[UTCTIME_HOUR];
-        tm.tm_min = values[UTCTIME_MIN];
-        tm.tm_sec = values[UTCTIME_SEC];
-        tm.tm_isdst = 0;
+            tm.tm_year = values[UTCTIME_YEAR] - 1900;
+            tm.tm_mon = values[UTCTIME_MON] - 1;
+            tm.tm_mday = values[UTCTIME_DAY];
+            tm.tm_hour = values[UTCTIME_HOUR];
+            tm.tm_min = values[UTCTIME_MIN];
+            tm.tm_sec = values[UTCTIME_SEC];
+            tm.tm_isdst = 0;
 
-        int64_t mst = timegm( &tm );
-        mst += values[UTCTIME_TZ] * 60;
-        mst *= 1000;
-        mst += values[UTCTIME_MSEC];
-        t = VLC_TICK_FROM_MS(mst);
-    } catch(int) {
+            int64_t mst = timegm( &tm );
+            mst += values[UTCTIME_TZ] * 60;
+            mst *= 1000;
+            mst += values[UTCTIME_MSEC];
+            t = VLC_TICK_FROM_MS(mst);
+        } else {
+            // Failure parsing time string
+            t = 0;
+        }
+    } catch(...) {
         t = 0;
     }
-}
-
-time_t UTCTime::time() const
-{
-    return SEC_FROM_VLC_TICK(t);
 }
 
 vlc_tick_t UTCTime::mtime() const

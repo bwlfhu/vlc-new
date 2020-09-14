@@ -4,8 +4,8 @@ libstream_out_dummy_plugin_la_SOURCES = stream_out/dummy.c
 libstream_out_cycle_plugin_la_SOURCES = stream_out/cycle.c
 libstream_out_delay_plugin_la_SOURCES = stream_out/delay.c
 libstream_out_stats_plugin_la_SOURCES = stream_out/stats.c
-libstream_out_description_plugin_la_SOURCES = stream_out/description.c
-libstream_out_standard_plugin_la_SOURCES = stream_out/standard.c
+libstream_out_standard_plugin_la_SOURCES = stream_out/standard.c \
+	stream_out/sdp_helper.c stream_out/sdp_helper.h
 libstream_out_standard_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) $(CPPFLAGS_access_output_srt)
 libstream_out_standard_plugin_la_LIBADD = $(SOCKET_LIBS)
 libstream_out_duplicate_plugin_la_SOURCES = stream_out/duplicate.c
@@ -36,7 +36,6 @@ sout_LTLIBRARIES = \
 	libstream_out_cycle_plugin.la \
 	libstream_out_delay_plugin.la \
 	libstream_out_stats_plugin.la \
-	libstream_out_description_plugin.la \
 	libstream_out_standard_plugin.la \
 	libstream_out_duplicate_plugin.la \
 	libstream_out_es_plugin.la \
@@ -50,11 +49,38 @@ sout_LTLIBRARIES = \
 	libstream_out_setid_plugin.la \
 	libstream_out_transcode_plugin.la
 
+if HAVE_DECKLINK
+libstream_out_sdi_plugin_la_CXXFLAGS = $(AM_CXXFLAGS) $(CPPFLAGS_decklinkoutput)
+libstream_out_sdi_plugin_la_LIBADD = $(LIBS_decklink) $(LIBDL) -lpthread
+libstream_out_sdi_plugin_la_SOURCES = stream_out/sdi/sdiout.cpp \
+        stream_out/sdi/sdiout.hpp \
+        stream_out/sdi/Ancillary.cpp \
+        stream_out/sdi/Ancillary.hpp \
+        stream_out/sdi/AES3Audio.cpp \
+        stream_out/sdi/AES3Audio.hpp \
+        stream_out/sdi/DBMHelper.cpp \
+        stream_out/sdi/DBMHelper.hpp \
+        stream_out/sdi/DBMSDIOutput.cpp \
+        stream_out/sdi/DBMSDIOutput.hpp \
+        stream_out/sdi/SDIAudioMultiplex.cpp \
+        stream_out/sdi/SDIAudioMultiplex.hpp \
+        stream_out/sdi/SDIGenerator.cpp \
+        stream_out/sdi/SDIGenerator.hpp \
+        stream_out/sdi/SDIOutput.cpp \
+        stream_out/sdi/SDIOutput.hpp \
+        stream_out/sdi/SDIStream.cpp \
+        stream_out/sdi/SDIStream.hpp \
+        stream_out/sdi/V210.cpp \
+        stream_out/sdi/V210.hpp
+sout_LTLIBRARIES += libstream_out_sdi_plugin.la
+endif
+
 # RTP plugin
 sout_LTLIBRARIES += libstream_out_rtp_plugin.la
 libstream_out_rtp_plugin_la_SOURCES = \
+	stream_out/sdp_helper.c stream_out/sdp_helper.h \
 	stream_out/rtp.c stream_out/rtp.h stream_out/rtpfmt.c \
-	stream_out/rtcp.c stream_out/rtsp.c stream_out/vod.c
+	stream_out/rtcp.c stream_out/rtsp.c
 libstream_out_rtp_plugin_la_CFLAGS = $(AM_CFLAGS)
 libstream_out_rtp_plugin_la_LIBADD = $(SOCKET_LIBS)
 if HAVE_GCRYPT
@@ -85,6 +111,8 @@ libdemux_chromecast_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -Istream_out/chromecast
 
 libstream_out_chromecast_plugin_la_SOURCES = stream_out/chromecast/cast.cpp stream_out/chromecast/chromecast.h \
                                              stream_out/chromecast/cast_channel.proto \
+                                             stream_out/renderer_common.hpp \
+                                             stream_out/renderer_common.cpp \
                                              stream_out/chromecast/chromecast_common.h stream_out/chromecast/chromecast_ctrl.cpp \
                                              misc/webservices/json.h misc/webservices/json.c stream_out/chromecast/chromecast_communication.cpp
 nodist_libstream_out_chromecast_plugin_la_SOURCES = stream_out/chromecast/cast_channel.pb.cc

@@ -81,9 +81,9 @@ w:set_text( text ): Change text displayed by the widget. Applies to: button, lab
 w:get_text(): Read text displayed by the widget. Returns a string. Applies to: button, label, html, text_input, password, check_box.
 w:set_checked( bool ): Set check state of a check box. Applies to: check_box.
 w:get_checked(): Read check state of a check box. Returns a boolean. Applies to: check_box.
-w:add_value( text, id ): Add a value with identifier 'id' (integer) and text 'text'. It's always best to have unique identifiers. Applies to: drop_down.
-w:get_value(): Return identifier of the selected item. Corresponds to the text value chosen by the user. Applies to: drop_down.
-w:clear(): Clear a list or drop_down widget. After that, all values previously added are lost.
+w:add_value( text, id ): Add a value with identifier 'id' (integer) and text 'text'. It's always best to have unique identifiers. Applies to: list and drop-down.
+w:get_value(): Return identifier of the selected item. Corresponds to the text value chosen by the user. Applies to: drop-down.
+w:clear(): Clear a list or drop-down widget. After that, all values previously added are lost.
 w:get_selection(): Retrieve a table representing the current selection. Keys are the ids, values are the texts associated. Applies to: list.
 
 errno
@@ -108,11 +108,11 @@ h:handler( url, user, password, callback, data ) -- add a handler for given url.
 h:file( url, mime, user, password, callback, data ) -- add a file for given url with given mime type. If user and password are non nil, they will be used to authenticate connecting clients. callback will be called to handle connections. The callback function takes 2 arguments: data and request. It returns the reply as a string.
 h:redirect( url_dst, url_src ): Redirect all connections from url_src to url_dst.
 
-Input
------
-input.is_playing(): Return true if input exists.
-input.add_subtitle(url): Add a subtitle file (by path) to the current input
-input.item(): Get the current input item. Input item methods are:
+Player
+------
+player.is_playing(): Return true if input exists.
+player.add_subtitle(url, autoselect=false): Add a subtitle file (by path) to the current input
+player.item(): Get the current input item. Input item methods are:
   :uri(): Get item's URI.
   :name(): Get item's name.
   :duration(): Get item's duration in seconds or negative value if unavailable.
@@ -138,6 +138,40 @@ input.item(): Get the current input item. Input item methods are:
     .send_bitrate
     .played_abuffers
     .lost_abuffers
+player.get_time(): Get the current time, in microseconds
+player.get_position(): Get the current position, as a float between 0 and 1
+player.get_rate(): Get the playing rate
+player.set_rate(f): Set the playing rate
+player.increment_rate(): Increment rate by 1 step
+player.decrement_rate(): Decrement rate by 1 step
+player.get_video_tracks(): Get the list of video tracks. Each item contains:
+  .id: the track id
+  .name: the track name
+  .selected: a boolean indicating whether the track is currently selected
+player.get_audio_tracks(): Get the list of audio tracks (items have the same format as in get_video_tracks())
+player.get_spu_tracks(): Get the list of SPU tracks (items have the same format as in get_video_tracks())
+player.toggle_video_track(): Select/deselect a video track
+player.toggle_audio_track(): Select/deselect an audio track
+player.toggle_audio_track(): Select/deselect an SPU track
+player.get_titles_count(): Get the number of titles for the current media
+player.get_title_index(): Get the current title index
+player.title_prev(): Go to the previous title
+player.title_next(): Go to the next title
+player.title_goto(i): Go to title at index i
+player.get_chapters_count(): Get the number of chapter for the current title
+player.get_chapter_index(): Get the current chapter index
+player.chapter_prev(): Go to the previous chapter
+player.chapter_next(): Go to the next chapter
+player.chapter_goto(i): Go to chapter at index i
+player.next_video_frame(): Go to the next video frame
+player.seek_by_pos_absolute(f): Seek to an absolute position (a float between 0 and 1)
+player.seek_by_pos_relative(f): Seek the position by a relative amount
+player.seek_by_time_absolute(us): Seek to an absolute time (in microseconds)
+player.seek_by_time_relative(us): Seek the time by a relative amount (in microseconds)
+player.get_audio_delay(): Get the audio delay, as a float in seconds
+player.set_audio_delay(s): Set the audio delay, as a float in seconds
+player.get_subtitle_delay(): Get the subtitle delay, as a float in seconds
+player.set_subtitle_delay(s): Set the subtitle delay, as a float in seconds
 
 Input/Output
 ------------
@@ -148,7 +182,7 @@ io.mkdir("path", "mode"): Similar to mkdir(2). The mode is passed as a string
   case of failure), and a more specific error code as its 2nd returned value
   in case of failure. The error code is to be used with vlc.errno
 io.readdir("path"): Lists all files & directories in the provided folder.
-io.open("path"[, "mode"]): Similar to lua's io.open. Mode is optional and 
+io.open("path"[, "mode"]): Similar to lua's io.open. Mode is optional and
   defaults to "r". It returns a file object with the following member functions:
     .read
     .write
@@ -231,13 +265,11 @@ net.opendir( path ): List a directory's contents.
 
 Objects
 -------
-object.input(): Get the current input object.
+object.player(): Get the player object.
 object.playlist(): Get the playlist object.
 object.libvlc(): Get the libvlc object.
 object.aout(): Get the audio output object.
 object.vout(): Get the video output object.
-
-object.find( object, type, mode ): Return nil. DO NOT USE.
 
 OSD
 ---
@@ -262,8 +294,11 @@ playlist.play(): Play.
 playlist.pause(): Pause.
 playlist.stop(): Stop.
 playlist.clear(): Clear the playlist.
+playlist.get_repeat(): Get current repeat mode.
 playlist.repeat_( [status] ): Toggle item repeat or set to specified value.
+playlist.get_loop(): Get current loop mode.
 playlist.loop( [status] ): Toggle playlist loop or set to specified value.
+playlist.get_random(): Get current random mode.
 playlist.random( [status] ): Toggle playlist random or set to specified value.
 playlist.goto( id ): Go to specified track.
 playlist.add( ... ): Add a bunch of items to the playlist.
@@ -318,30 +353,39 @@ playlist.get( [what, [tree]] ): Get the playlist.
       .path:
       .duration: (-1 if unknown)
       .nb_played:
-      .children: A table of children playlist items.
-playlist.search( name ): filter the playlist items with the given string
 playlist.current(): return the current playlist item id
+playlist.current_item(): return the current playlist item (same structure as player.item())
 playlist.sort( key ): sort the playlist according to the key.
   Key must be one of the followings values: 'id', 'title', 'title nodes first',
                                             'artist', 'genre', 'random', 'duration',
                                             'title numeric' or 'album'.
 playlist.status(): return the playlist status: 'stopped', 'playing', 'paused' or 'unknown'.
 playlist.delete( id ): check if item of id is in playlist and delete it. returns -1 when invalid id.
-playlist.move( id_item, id_where ): take id_item and if id_where has children, it put it as first children, 
+playlist.move( id_item, id_where ): take id_item and if id_where has children, it put it as first children,
    if id_where don't have children, id_item is put after id_where in same playlist. returns -1 when invalid ids.
 
 FIXME: add methods to get an item's meta, options, es ...
 
-Services discovery
+Renderer discovery
 ------------------
 
-Interfaces and extensions can use the following SD functions:
+Renderer discovery scripts can use the following RD functions:
 
-sd.get_services_names(): Get a table of all available service discovery
-  modules. The module name is used as key, the long name is used as value.
-sd.add( name ): Add service discovery.
-sd.remove( name ): Remove service discovery.
-sd.is_loaded( name ): Check if service discovery is loaded.
+rd.create( module_type ): Create a renderer discovery object using the
+    module type provided as <module_type> (eg. "mdns_renderer")
+
+The renderer discovery object has the following members:
+  :list() List all known renderers
+    This returns an array of objects containings:
+        .type: The type of this renderer
+        .name: The renderer name
+        .id: The id, to be provided to select()
+        .selected: True if the renderer is currently selected
+
+  :select(<id>) Select a renderer, or disable the current one by providing -1
+
+Services discovery
+------------------
 
 Services discovery scripts can use the following SD functions:
 

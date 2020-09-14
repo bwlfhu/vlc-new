@@ -2,7 +2,6 @@
  * mmstu.c: MMS access plug-in
  *****************************************************************************
  * Copyright (C) 2001, 2002 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *
@@ -34,14 +33,14 @@
 
 #include <errno.h>
 #include <assert.h>
-#include <stdnoreturn.h>
 
 #include <sys/types.h>
 #include <unistd.h>
-#ifdef HAVE_POLL
+#ifdef HAVE_POLL_H
 #   include <poll.h>
 #endif
 
+#include <vlc_charset.h>
 #include <vlc_network.h>
 #include <vlc_url.h>
 #include <vlc_interrupt.h>
@@ -111,7 +110,6 @@ int  MMSTUOpen( stream_t *p_access )
     {
         msg_Err( p_access, "invalid server name" );
         vlc_UrlClean( &p_sys->url );
-        vlc_mutex_destroy( &p_sys->lock_netwrite );
         free( p_sys );
         return VLC_EGENERIC;
     }
@@ -148,7 +146,6 @@ int  MMSTUOpen( stream_t *p_access )
     {
         msg_Err( p_access, "cannot connect to server" );
         vlc_UrlClean( &p_sys->url );
-        vlc_mutex_destroy( &p_sys->lock_netwrite );
         free( p_sys );
         return VLC_EGENERIC;
     }
@@ -256,7 +253,7 @@ static int Control( stream_t *p_access, int i_query, va_list args )
 
         case STREAM_GET_PRIVATE_ID_STATE:
             i_int = va_arg( args, int );
-            pb_bool = (bool *)va_arg( args, bool * );
+            pb_bool = va_arg( args, bool * );
 
             if( i_int < 0 || i_int > 127 )
                 return VLC_EGENERIC;
@@ -482,8 +479,8 @@ static int MMSOpen( stream_t  *p_access, vlc_url_t *p_url, int  i_proto )
 
     var_buffer_t buffer;
     char         *tmp;
-    const uint16_t *p;
-    const uint8_t  *p_cmdend;
+    const uint8_t *p;
+    const uint8_t *p_cmdend;
     uint32_t     i_server_version;
     uint32_t     i_tool_version;
     uint32_t     i_update_player_url;
@@ -495,7 +492,7 @@ static int MMSOpen( stream_t  *p_access, vlc_url_t *p_url, int  i_proto )
 
     /* *** Open a TCP connection with server *** */
     msg_Dbg( p_access, "waiting for connection..." );
-    p_sys->i_handle_tcp = net_ConnectTCP( p_access, p_url->psz_host, p_url->i_port );
+    p_sys->i_handle_tcp = net_Connect( p_access, p_url->psz_host, p_url->i_port, SOCK_STREAM, 0 );
     if( p_sys->i_handle_tcp < 0 )
     {
         msg_Err( p_access, "failed to open a connection (tcp)" );
@@ -588,38 +585,32 @@ static int MMSOpen( stream_t  *p_access, vlc_url_t *p_url, int  i_proto )
     i_tool_version = GetDWLE( p_sys->p_cmd + MMS_CMD_HEADERSIZE + 36 );
     i_update_player_url = GetDWLE( p_sys->p_cmd + MMS_CMD_HEADERSIZE + 40 );
     i_encryption_type = GetDWLE( p_sys->p_cmd + MMS_CMD_HEADERSIZE + 44 );
-    p = (uint16_t*)( p_sys->p_cmd + MMS_CMD_HEADERSIZE + 48 );
+    p = p_sys->p_cmd + MMS_CMD_HEADERSIZE + 48;
     p_cmdend = &p_sys->p_cmd[p_sys->i_cmd];
 
-#define GETUTF16( psz, size ) \
-    if( (UINT32_MAX == size) || \
-        ((uintptr_t) p / sizeof(uint16_t) < size) || \
-       ((UINTPTR_MAX - (uintptr_t) p_cmdend) / sizeof(uint16_t)) < size )\
+#define GETUTF16( fmt, size ) \
+do \
+{ \
+    if( (p_cmdend - p) / 2u < (size) ) \
     {\
         var_buffer_free( &buffer );\
         MMSClose( p_access );\
         return VLC_EBADVAR;\
     }\
-    if( (psz = malloc(size + 1)) )\
-    {\
-        for( size_t i = 0; i < size; i++ ) \
-        { \
-            psz[i] = p[i]; \
-        } \
-        psz[size] = '\0'; \
-        p += ( size ); \
-    }
-    GETUTF16( p_sys->psz_server_version, i_server_version );
-    GETUTF16( p_sys->psz_tool_version, i_tool_version );
-    GETUTF16( p_sys->psz_update_player_url, i_update_player_url );
-    GETUTF16( p_sys->psz_encryption_type, i_encryption_type );
+    char *str = FromCharset( "UTF-16LE", p, (size) * 2 ); \
+    p += (size) * 2; \
+    if( str != NULL ) \
+    { \
+        msg_Dbg( p_access, fmt " %s", str ); \
+        free( str ); \
+    } \
+} while (0)
+
+    GETUTF16( "server version:   ", i_server_version );
+    GETUTF16( "tool version:     ", i_tool_version );
+    GETUTF16( "update player URL:", i_update_player_url );
+    GETUTF16( "encryption type:  ", i_encryption_type );
 #undef GETUTF16
-    msg_Dbg( p_access,
-             "0x01 --> server_version:\"%s\" tool_version:\"%s\" update_player_url:\"%s\" encryption_type:\"%s\"",
-             p_sys->psz_server_version,
-             p_sys->psz_tool_version,
-             p_sys->psz_update_player_url,
-             p_sys->psz_encryption_type );
 
     /* *** should make an 18 command to make data timing *** */
 
@@ -996,11 +987,6 @@ static void MMSClose( stream_t  *p_access )
     FREENULL( p_sys->p_media );
     FREENULL( p_sys->p_header );
     p_sys->i_header = 0;
-
-    FREENULL( p_sys->psz_server_version );
-    FREENULL( p_sys->psz_tool_version );
-    FREENULL( p_sys->psz_update_player_url );
-    FREENULL( p_sys->psz_encryption_type );
 }
 
 /****************************************************************************
@@ -1596,22 +1582,17 @@ static int mms_HeaderMediaRead( stream_t *p_access, int i_type )
     return -1;
 }
 
-noreturn static void *KeepAliveThread( void *p_data )
+static void *KeepAliveThread( void *p_data )
 {
     stream_t *p_access = p_data;
+    access_sys_t *p_sys = p_access->p_sys;
 
-    for( ;; )
-    {
-        /* Send keep-alive every ten seconds */
-        int canc = vlc_savecancel();
-
+    do  /* Send keep-alive every ten seconds */
         mms_CommandSend( p_access, 0x1b, 0, 0, NULL, 0 );
+    while (vlc_sem_timedwait( &p_sys->keep_alive.sem,
+                              vlc_tick_now() + VLC_TICK_FROM_SEC(10) ));
 
-        vlc_restorecancel( canc );
-
-        vlc_tick_sleep( VLC_TICK_FROM_SEC(10) );
-    }
-    vlc_assert_unreachable();
+    return NULL;
 }
 
 static void KeepAliveStart( stream_t *p_access )
@@ -1620,7 +1601,8 @@ static void KeepAliveStart( stream_t *p_access )
     if( p_sys->b_keep_alive )
         return;
 
-    p_sys->b_keep_alive = !vlc_clone( &p_sys->keep_alive,
+    vlc_sem_init( &p_sys->keep_alive.sem, 0 );
+    p_sys->b_keep_alive = !vlc_clone( &p_sys->keep_alive.thread,
                                       KeepAliveThread, p_access,
                                       VLC_THREAD_PRIORITY_LOW );
 }
@@ -1631,7 +1613,7 @@ static void KeepAliveStop( stream_t *p_access )
     if( !p_sys->b_keep_alive )
         return;
 
-    vlc_cancel( p_sys->keep_alive );
-    vlc_join( p_sys->keep_alive, NULL );
+    vlc_sem_post( &p_sys->keep_alive.sem );
+    vlc_join( p_sys->keep_alive.thread, NULL );
     p_sys->b_keep_alive = false;
 }

@@ -2,7 +2,6 @@
  * hqdn3d.c : high-quality denoise 3D ported from MPlayer
  *****************************************************************************
  * Copyright (C) 2011 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Cheng Sun <chengsun9@gmail.com>
  *
@@ -179,8 +178,6 @@ static void Close(vlc_object_t *this)
     var_DelCallback( filter, FILTER_PREFIX "chroma-spat", DenoiseCallback, sys );
     var_DelCallback( filter, FILTER_PREFIX "luma-temp", DenoiseCallback, sys );
     var_DelCallback( filter, FILTER_PREFIX "chroma-temp", DenoiseCallback, sys );
-
-    vlc_mutex_destroy( &sys->coefs_mutex );
 
     for (int i = 0; i < 3; ++i) {
         free(cfg->Frame[i]);

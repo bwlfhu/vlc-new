@@ -138,6 +138,10 @@ static int Open( vlc_object_t *p_this)
     filter_t *p_filter = (filter_t*)p_this;
     filter_sys_t *p_sys;
 
+    /* This filter cannot change the format. */
+    if( p_filter->fmt_out.video.i_chroma != p_filter->fmt_in.video.i_chroma )
+        return VLC_EGENERIC;
+
     p_sys = p_filter->p_sys = malloc( sizeof( *p_sys ) );
 
     if( unlikely( !p_sys ) )
@@ -160,11 +164,18 @@ static int Open( vlc_object_t *p_this)
         p_filter->fmt_out.video.i_frame_rate_base = i_out_frame_rate_base;
     }
 
+    if( p_filter->fmt_out.video.i_frame_rate == 0 ) {
+        msg_Err( p_filter, "Invalid output frame rate" );
+        free( p_sys );
+        return VLC_EGENERIC;
+    }
+
     msg_Dbg( p_filter, "Converting fps from %d/%d -> %d/%d",
             p_filter->fmt_in.video.i_frame_rate, p_filter->fmt_in.video.i_frame_rate_base,
             p_filter->fmt_out.video.i_frame_rate, p_filter->fmt_out.video.i_frame_rate_base );
 
-    p_sys->i_output_frame_interval = p_filter->fmt_out.video.i_frame_rate_base * CLOCK_FREQ / p_filter->fmt_out.video.i_frame_rate;
+    p_sys->i_output_frame_interval = vlc_tick_from_samples(p_filter->fmt_out.video.i_frame_rate_base,
+                                                           p_filter->fmt_out.video.i_frame_rate);
 
     date_Init( &p_sys->next_output_pts,
                p_filter->fmt_out.video.i_frame_rate, p_filter->fmt_out.video.i_frame_rate_base );
@@ -172,6 +183,11 @@ static int Open( vlc_object_t *p_this)
     p_sys->p_previous_pic = NULL;
 
     p_filter->pf_video_filter = Filter;
+
+    /* We don't change neither the format nor the picture */
+    if ( p_filter->vctx_in )
+        p_filter->vctx_out = vlc_video_context_Hold( p_filter->vctx_in );
+
     return VLC_SUCCESS;
 }
 
@@ -181,5 +197,7 @@ static void Close( vlc_object_t *p_this )
     filter_sys_t *p_sys = p_filter->p_sys;
     if( p_sys->p_previous_pic )
         picture_Release( p_sys->p_previous_pic );
+    if( p_filter->vctx_out )
+        vlc_video_context_Release( p_filter->vctx_out );
     free( p_sys );
 }

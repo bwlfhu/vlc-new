@@ -2,7 +2,6 @@
  * copy.h: Fast YV12/NV12 copy
  *****************************************************************************
  * Copyright (C) 2009 Laurent Aimar
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir_AT_ videolan _DOT_ org>
  *
@@ -30,6 +29,8 @@ typedef struct {
 # ifdef CAN_COMPILE_SSE2
     uint8_t *buffer;
     size_t  size;
+# else
+    char dummy;
 # endif
 } copy_cache_t;
 

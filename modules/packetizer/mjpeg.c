@@ -80,9 +80,9 @@ static void PacketizeFlush( decoder_t *p_dec )
 /*****************************************************************************
  * Helpers:
  *****************************************************************************/
-static void PacketizeReset( void *p_private, bool b_broken )
+static void PacketizeReset( void *p_private, bool b_flush )
 {
-    VLC_UNUSED(b_broken);
+    VLC_UNUSED(b_flush);
     decoder_t *p_dec = p_private;
     decoder_sys_t *p_sys = p_dec->p_sys;
 
@@ -202,7 +202,8 @@ static int Open( vlc_object_t *p_this )
     packetizer_Init( &p_sys->packetizer,
                      p_mjpg_startcode, sizeof(p_mjpg_startcode), startcode_Find,
                      NULL, 0, 295,
-                     PacketizeReset, PacketizeParse, PacketizeValidate, p_dec );
+                     PacketizeReset, PacketizeParse, PacketizeValidate, NULL,
+                     p_dec );
 
     p_dec->pf_packetize = Packetize;
     p_dec->pf_flush = PacketizeFlush;

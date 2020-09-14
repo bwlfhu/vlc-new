@@ -33,9 +33,13 @@
 #include <vlc_opengl.h>
 #include "vout_helper.h"
 
+#include "filter_draw.h"
+#include "renderer.h"
+
 /* Plugin callbacks */
-static int Open (vlc_object_t *);
-static void Close (vlc_object_t *);
+static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
+                video_format_t *fmtp, vlc_video_context *context);
+static void Close(vout_display_t *vd);
 
 #define GL_TEXT N_("OpenGL extension")
 #define GLES2_TEXT N_("OpenGL ES 2 extension")
@@ -48,8 +52,7 @@ vlc_module_begin ()
 # define MODULE_VARNAME "gles2"
     set_shortname (N_("OpenGL ES2"))
     set_description (N_("OpenGL for Embedded Systems 2 video output"))
-    set_capability ("vout display", 265)
-    set_callbacks (Open, Close)
+    set_callback_display(Open, 265)
     add_shortcut ("opengles2", "gles2")
     add_module("gles2", "opengl es2", NULL, GLES2_TEXT, PROVIDER_LONGTEXT)
 
@@ -61,41 +64,49 @@ vlc_module_begin ()
     set_description (N_("OpenGL video output"))
     set_category (CAT_VIDEO)
     set_subcategory (SUBCAT_VIDEO_VOUT)
-    set_capability ("vout display", 270)
-    set_callbacks (Open, Close)
+    set_callback_display(Open, 270)
     add_shortcut ("opengl", "gl")
     add_module("gl", "opengl", NULL, GL_TEXT, PROVIDER_LONGTEXT)
 #endif
     add_glopts ()
+
+    add_opengl_submodule_renderer()
+    add_opengl_submodule_draw()
 vlc_module_end ()
 
 struct vout_display_sys_t
 {
     vout_display_opengl_t *vgl;
     vlc_gl_t *gl;
-    picture_pool_t *pool;
+    vout_display_place_t place;
+    bool place_changed;
 };
 
 /* Display callbacks */
-static picture_pool_t *Pool (vout_display_t *, unsigned);
 static void PictureRender (vout_display_t *, picture_t *, subpicture_t *, vlc_tick_t);
-static void PictureDisplay (vout_display_t *, picture_t *, subpicture_t *);
+static void PictureDisplay (vout_display_t *, picture_t *);
 static int Control (vout_display_t *, int, va_list);
+
+static int SetViewpoint(vout_display_t *vd, const vlc_viewpoint_t *vp)
+{
+    vout_display_sys_t *sys = vd->sys;
+    return vout_display_opengl_SetViewpoint (sys->vgl, vp);
+}
 
 /**
  * Allocates a surface and an OpenGL context for video output.
  */
-static int Open (vlc_object_t *obj)
+static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
+                video_format_t *fmt, vlc_video_context *context)
 {
-    vout_display_t *vd = (vout_display_t *)obj;
     vout_display_sys_t *sys = malloc (sizeof (*sys));
     if (unlikely(sys == NULL))
         return VLC_ENOMEM;
 
     sys->gl = NULL;
-    sys->pool = NULL;
+    sys->place_changed = false;
 
-    vout_window_t *surface = vd->cfg->window;
+    vout_window_t *surface = cfg->window;
     char *gl_name = var_InheritString(surface, MODULE_VARNAME);
 
     /* VDPAU GL interop works only with GLX. Override the "gl" option to force
@@ -103,7 +114,7 @@ static int Open (vlc_object_t *obj)
 #ifndef USE_OPENGL_ES2
     if (surface->type == VOUT_WINDOW_TYPE_XID)
     {
-        switch (vd->fmt.i_chroma)
+        switch (vd->source->i_chroma)
         {
             case VLC_CODEC_VDPAU_VIDEO_444:
             case VLC_CODEC_VDPAU_VIDEO_422:
@@ -124,12 +135,10 @@ static int Open (vlc_object_t *obj)
     }
 #endif
 
-    sys->gl = vlc_gl_Create (surface, API, gl_name);
+    sys->gl = vlc_gl_Create(cfg, API, gl_name);
     free(gl_name);
     if (sys->gl == NULL)
         goto error;
-
-    vlc_gl_Resize (sys->gl, vd->cfg->display.width, vd->cfg->display.height);
 
     /* Initialize video display */
     const vlc_fourcc_t *spu_chromas;
@@ -137,20 +146,20 @@ static int Open (vlc_object_t *obj)
     if (vlc_gl_MakeCurrent (sys->gl))
         goto error;
 
-    sys->vgl = vout_display_opengl_New (&vd->fmt, &spu_chromas, sys->gl,
-                                        &vd->cfg->viewpoint);
+    sys->vgl = vout_display_opengl_New (fmt, &spu_chromas, sys->gl,
+                                        &cfg->viewpoint, context);
     vlc_gl_ReleaseCurrent (sys->gl);
 
     if (sys->vgl == NULL)
         goto error;
 
     vd->sys = sys;
-    vd->info.has_pictures_invalid = false;
     vd->info.subpicture_chromas = spu_chromas;
-    vd->pool = Pool;
     vd->prepare = PictureRender;
     vd->display = PictureDisplay;
     vd->control = Control;
+    vd->set_viewpoint = SetViewpoint;
+    vd->close = Close;
     return VLC_SUCCESS;
 
 error:
@@ -163,9 +172,8 @@ error:
 /**
  * Destroys the OpenGL context.
  */
-static void Close (vlc_object_t *obj)
+static void Close(vout_display_t *vd)
 {
-    vout_display_t *vd = (vout_display_t *)obj;
     vout_display_sys_t *sys = vd->sys;
     vlc_gl_t *gl = sys->gl;
 
@@ -175,21 +183,6 @@ static void Close (vlc_object_t *obj)
 
     vlc_gl_Release (gl);
     free (sys);
-}
-
-/**
- * Returns picture buffers
- */
-static picture_pool_t *Pool (vout_display_t *vd, unsigned count)
-{
-    vout_display_sys_t *sys = vd->sys;
-
-    if (!sys->pool && vlc_gl_MakeCurrent (sys->gl) == VLC_SUCCESS)
-    {
-        sys->pool = vout_display_opengl_GetPool (sys->vgl, count);
-        vlc_gl_ReleaseCurrent (sys->gl);
-    }
-    return sys->pool;
 }
 
 static void PictureRender (vout_display_t *vd, picture_t *pic, subpicture_t *subpicture,
@@ -205,19 +198,35 @@ static void PictureRender (vout_display_t *vd, picture_t *pic, subpicture_t *sub
     }
 }
 
-static void PictureDisplay (vout_display_t *vd, picture_t *pic, subpicture_t *subpicture)
+static void PictureDisplay (vout_display_t *vd, picture_t *pic)
 {
     vout_display_sys_t *sys = vd->sys;
+    VLC_UNUSED(pic);
 
     if (vlc_gl_MakeCurrent (sys->gl) == VLC_SUCCESS)
     {
-        vout_display_opengl_Display (sys->vgl, &vd->source);
+        if (sys->place_changed)
+        {
+            float window_ar = (float)sys->place.width / sys->place.height;
+            vout_display_opengl_SetWindowAspectRatio(sys->vgl, window_ar);
+            vout_display_opengl_Viewport(sys->vgl, sys->place.x, sys->place.y,
+                                         sys->place.width, sys->place.height);
+            sys->place_changed = false;
+        }
+
+        vout_display_opengl_Display(sys->vgl);
         vlc_gl_ReleaseCurrent (sys->gl);
     }
+}
 
-    picture_Release (pic);
-    if (subpicture != NULL)
-        subpicture_Delete(subpicture);
+static void
+FlipVerticalAlign(vout_display_cfg_t *cfg)
+{
+    /* Reverse vertical alignment as the GL tex are Y inverted */
+    if (cfg->align.vertical == VLC_VIDEO_ALIGN_TOP)
+        cfg->align.vertical = VLC_VIDEO_ALIGN_BOTTOM;
+    else if (cfg->align.vertical == VLC_VIDEO_ALIGN_BOTTOM)
+        cfg->align.vertical = VLC_VIDEO_ALIGN_TOP;
 }
 
 static int Control (vout_display_t *vd, int query, va_list ap)
@@ -235,43 +244,27 @@ static int Control (vout_display_t *vd, int query, va_list ap)
       case VOUT_DISPLAY_CHANGE_DISPLAY_FILLED:
       case VOUT_DISPLAY_CHANGE_ZOOM:
       {
-        vout_display_cfg_t c = *va_arg (ap, const vout_display_cfg_t *);
-        const video_format_t *src = &vd->source;
-        vout_display_place_t place;
+        vout_display_cfg_t cfg = *vd->cfg;
 
-        /* Reverse vertical alignment as the GL tex are Y inverted */
-        if (c.align.vertical == VOUT_DISPLAY_ALIGN_TOP)
-            c.align.vertical = VOUT_DISPLAY_ALIGN_BOTTOM;
-        else if (c.align.vertical == VOUT_DISPLAY_ALIGN_BOTTOM)
-            c.align.vertical = VOUT_DISPLAY_ALIGN_TOP;
+        FlipVerticalAlign(&cfg);
 
-        vout_display_PlacePicture (&place, src, &c, false);
-        vlc_gl_Resize (sys->gl, c.display.width, c.display.height);
-        if (vlc_gl_MakeCurrent (sys->gl) != VLC_SUCCESS)
-            return VLC_EGENERIC;
-        vout_display_opengl_SetWindowAspectRatio(sys->vgl, (float)place.width / place.height);
-        vout_display_opengl_Viewport(sys->vgl, place.x, place.y, place.width, place.height);
-        vlc_gl_ReleaseCurrent (sys->gl);
+        vout_display_PlacePicture(&sys->place, vd->source, &cfg);
+        sys->place_changed = true;
+        vlc_gl_Resize (sys->gl, cfg.display.width, cfg.display.height);
         return VLC_SUCCESS;
       }
 
       case VOUT_DISPLAY_CHANGE_SOURCE_ASPECT:
       case VOUT_DISPLAY_CHANGE_SOURCE_CROP:
       {
-        const vout_display_cfg_t *cfg = vd->cfg;
-        vout_display_place_t place;
+        vout_display_cfg_t cfg = *vd->cfg;
 
-        vout_display_PlacePicture (&place, &vd->source, cfg, false);
-        if (vlc_gl_MakeCurrent (sys->gl) != VLC_SUCCESS)
-            return VLC_EGENERIC;
-        vout_display_opengl_SetWindowAspectRatio(sys->vgl, (float)place.width / place.height);
-        vout_display_opengl_Viewport(sys->vgl, place.x, place.y, place.width, place.height);
-        vlc_gl_ReleaseCurrent (sys->gl);
+        FlipVerticalAlign(&cfg);
+
+        vout_display_PlacePicture(&sys->place, vd->source, &cfg);
+        sys->place_changed = true;
         return VLC_SUCCESS;
       }
-      case VOUT_DISPLAY_CHANGE_VIEWPOINT:
-        return vout_display_opengl_SetViewpoint (sys->vgl,
-            &va_arg (ap, const vout_display_cfg_t* )->viewpoint);
       default:
         msg_Err (vd, "Unknown request %d", query);
     }

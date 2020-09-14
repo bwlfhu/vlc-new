@@ -26,13 +26,24 @@ check_PROGRAMS = \
 	test_src_misc_variables \
 	test_src_input_stream \
 	test_src_input_stream_fifo \
+	test_src_input_thumbnail \
+	test_src_player \
 	test_src_interface_dialog \
+	test_src_media_source \
 	test_src_misc_bits \
 	test_src_misc_epg \
 	test_src_misc_keystore \
 	test_modules_packetizer_helpers \
 	test_modules_packetizer_hxxx \
-	test_modules_keystore
+	test_modules_packetizer_h264 \
+	test_modules_packetizer_hevc \
+	test_modules_packetizer_mpegvideo \
+	test_modules_keystore \
+	test_modules_demux_dashuri \
+	test_modules_demux_timestamps_filter \
+	test_modules_demux_ts_pes \
+	$(NULL)
+
 if ENABLE_SOUT
 check_PROGRAMS += test_modules_tls
 endif
@@ -94,7 +105,7 @@ test_libvlc_media_list_player_LDADD = $(LIBVLC)
 test_libvlc_media_list_SOURCES = libvlc/media_list.c
 test_libvlc_media_list_LDADD = $(LIBVLC)
 test_libvlc_media_player_SOURCES = libvlc/media_player.c
-test_libvlc_media_player_LDADD = $(LIBVLC)
+test_libvlc_media_player_LDADD = $(LIBVLCCORE) $(LIBVLC)
 test_libvlc_media_discoverer_SOURCES = libvlc/media_discoverer.c
 test_libvlc_media_discoverer_LDADD = $(LIBVLC)
 test_libvlc_renderer_discoverer_SOURCES = libvlc/renderer_discoverer.c
@@ -116,6 +127,10 @@ test_src_input_stream_net_CFLAGS = $(AM_CFLAGS) -DTEST_NET
 test_src_input_stream_net_LDADD = $(LIBVLCCORE) $(LIBVLC)
 test_src_input_stream_fifo_SOURCES = src/input/stream_fifo.c
 test_src_input_stream_fifo_LDADD = $(LIBVLCCORE) $(LIBVLC)
+test_src_input_thumbnail_SOURCES = src/input/thumbnail.c
+test_src_input_thumbnail_LDADD = $(LIBVLCCORE) $(LIBVLC)
+test_src_player_SOURCES = src/player/player.c
+test_src_player_LDADD = $(LIBVLCCORE) $(LIBVLC) $(LIBM)
 test_src_misc_bits_SOURCES = src/misc/bits.c
 test_src_misc_bits_LDADD = $(LIBVLC)
 test_src_misc_epg_SOURCES = src/misc/epg.c
@@ -124,14 +139,33 @@ test_src_misc_keystore_SOURCES = src/misc/keystore.c
 test_src_misc_keystore_LDADD = $(LIBVLCCORE) $(LIBVLC)
 test_src_interface_dialog_SOURCES = src/interface/dialog.c
 test_src_interface_dialog_LDADD = $(LIBVLCCORE) $(LIBVLC)
+test_src_media_source_LDADD = $(LIBVLCCORE) $(LIBVLC)
+test_src_media_source_SOURCES = src/media_source/media_source.c
 test_modules_packetizer_helpers_SOURCES = modules/packetizer/helpers.c
 test_modules_packetizer_helpers_LDADD = $(LIBVLCCORE) $(LIBVLC)
 test_modules_packetizer_hxxx_SOURCES = modules/packetizer/hxxx.c
 test_modules_packetizer_hxxx_LDADD = $(LIBVLCCORE) $(LIBVLC)
+test_modules_packetizer_h264_SOURCES = modules/packetizer/h264.c \
+				modules/packetizer/packetizer.h
+test_modules_packetizer_h264_LDADD = $(LIBVLCCORE) $(LIBVLC)
+test_modules_packetizer_hevc_SOURCES = modules/packetizer/hevc.c \
+				modules/packetizer/packetizer.h
+test_modules_packetizer_hevc_LDADD = $(LIBVLCCORE) $(LIBVLC)
+test_modules_packetizer_mpegvideo_SOURCES = modules/packetizer/mpegvideo.c \
+				modules/packetizer/packetizer.h
+test_modules_packetizer_mpegvideo_LDADD = $(LIBVLCCORE) $(LIBVLC)
 test_modules_keystore_SOURCES = modules/keystore/test.c
 test_modules_keystore_LDADD = $(LIBVLCCORE) $(LIBVLC)
 test_modules_tls_SOURCES = modules/misc/tls.c
 test_modules_tls_LDADD = $(LIBVLCCORE) $(LIBVLC)
+test_modules_demux_dashuri_SOURCES = modules/demux/dashuri.cpp
+test_modules_demux_timestamps_filter_LDADD = $(LIBVLCCORE) $(LIBVLC)
+test_modules_demux_timestamps_filter_SOURCES = modules/demux/timestamps_filter.c
+test_modules_demux_ts_pes_LDADD = $(LIBVLCCORE) $(LIBVLC)
+test_modules_demux_ts_pes_SOURCES = modules/demux/ts_pes.c \
+				../modules/demux/mpeg/ts_pes.c \
+				../modules/demux/mpeg/ts_pes.h
+
 
 checkall:
 	$(MAKE) check_PROGRAMS="$(check_PROGRAMS) $(EXTRA_PROGRAMS)" check
@@ -236,6 +270,12 @@ libvlc_demux_dec_run_la_LIBADD += \
 	../modules/libtextst_plugin.la \
 	../modules/libsubstx3g_plugin.la
 endif
+if HAVE_ZVBI
+libvlc_demux_dec_run_la_LIBADD += ../modules/libzvbi_plugin.la
+endif
+if HAVE_TELX
+libvlc_demux_dec_run_la_LIBADD += ../modules/libtelx_plugin.la
+endif
 EXTRA_LTLIBRARIES += libvlc_demux_dec_run.la
 
 #
@@ -253,4 +293,13 @@ vlc_demux_dec_libfuzzer_SOURCES = vlc-demux-libfuzzer.c
 vlc_demux_dec_libfuzzer_LDADD = libvlc_demux_dec_run.la
 if HAVE_LIBFUZZER
 noinst_PROGRAMS += vlc-demux-libfuzzer vlc-demux-dec-libfuzzer vlc-demux-run vlc-demux-dec-run
+endif
+
+vlc_ios_SOURCES = iosvlc.m
+vlc_ios_LDFLAGS = $(LDFLAGS_vlc) -Wl,-framework,Foundation,-framework,UIKit
+vlc_ios_LDFLAGS += -Xlinker -rpath -Xlinker "$(libdir)"
+vlc_ios_CFLAGS = -fobjc-arc
+vlc_ios_LDADD = ../lib/libvlc.la ../src/libvlccore.la
+if HAVE_IOS
+noinst_PROGRAMS += vlc-ios
 endif

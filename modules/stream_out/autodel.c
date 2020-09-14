@@ -2,7 +2,6 @@
  * autodel.c: monitor mux inputs and automatically add/delete streams
  *****************************************************************************
  * Copyright (C) 2006 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Christophe Massiot <massiot@via.ecp.fr>
  *
@@ -34,30 +33,6 @@
 #include <vlc_sout.h>
 #include <vlc_block.h>
 
-/*****************************************************************************
- * Module descriptor
- *****************************************************************************/
-static int  Open    ( vlc_object_t * );
-static void Close   ( vlc_object_t * );
-
-#define SOUT_CFG_PREFIX "sout-autodel-"
-
-vlc_module_begin ()
-    set_shortname( N_("Autodel"))
-    set_description( N_("Automatically add/delete input streams"))
-    set_capability( "sout stream", 50 )
-    add_shortcut( "autodel" )
-    set_callbacks( Open, Close )
-vlc_module_end ()
-
-
-/*****************************************************************************
- * Local prototypes
- *****************************************************************************/
-static void *Add( sout_stream_t *, const es_format_t * );
-static void  Del( sout_stream_t *, void * );
-static int   Send( sout_stream_t *, void *, block_t * );
-
 typedef struct sout_stream_id_sys_t sout_stream_id_sys_t;
 struct sout_stream_id_sys_t
 {
@@ -72,45 +47,6 @@ typedef struct
     sout_stream_id_sys_t **pp_es;
     int i_es_num;
 } sout_stream_sys_t;
-
-/*****************************************************************************
- * Open:
- *****************************************************************************/
-static int Open( vlc_object_t *p_this )
-{
-    sout_stream_t     *p_stream = (sout_stream_t*)p_this;
-    sout_stream_sys_t *p_sys;
-
-    p_sys          = malloc( sizeof( sout_stream_sys_t ) );
-
-    if( !p_stream->p_next )
-    {
-        msg_Err( p_stream, "cannot create chain" );
-        free( p_sys );
-        return VLC_EGENERIC;
-    }
-    p_sys->pp_es = NULL;
-    p_sys->i_es_num = 0;
-
-    p_stream->pf_add    = Add;
-    p_stream->pf_del    = Del;
-    p_stream->pf_send   = Send;
-
-    p_stream->p_sys     = p_sys;
-
-    return VLC_SUCCESS;
-}
-
-/*****************************************************************************
- * Close:
- *****************************************************************************/
-static void Close( vlc_object_t * p_this )
-{
-    sout_stream_t     *p_stream = (sout_stream_t*)p_this;
-    sout_stream_sys_t *p_sys = (sout_stream_sys_t *)p_stream->p_sys;
-
-    free( p_sys );
-}
 
 static void *Add( sout_stream_t *p_stream, const es_format_t *p_fmt )
 {
@@ -180,3 +116,34 @@ static int Send( sout_stream_t *p_stream, void *_p_es, block_t *p_buffer )
 
     return VLC_SUCCESS;
 }
+
+static const struct sout_stream_operations ops = {
+    Add, Del, Send, NULL, NULL,
+};
+
+static int Open( vlc_object_t *p_this )
+{
+    sout_stream_t     *p_stream = (sout_stream_t*)p_this;
+    sout_stream_sys_t *p_sys = vlc_obj_malloc(p_this, sizeof (*p_sys));
+
+    if (unlikely(p_sys == NULL))
+        return VLC_ENOMEM;
+
+    p_sys->pp_es = NULL;
+    p_sys->i_es_num = 0;
+
+    p_stream->ops = &ops;
+    p_stream->p_sys = p_sys;
+
+    return VLC_SUCCESS;
+}
+
+#define SOUT_CFG_PREFIX "sout-autodel-"
+
+vlc_module_begin()
+    set_shortname(N_("Autodel"))
+    set_description(N_("Automatically add/delete input streams"))
+    set_capability("sout filter", 50)
+    add_shortcut("autodel")
+    set_callback(Open)
+vlc_module_end()

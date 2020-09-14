@@ -2,7 +2,6 @@
  * mkv.hpp : matroska demuxer
  *****************************************************************************
  * Copyright (C) 2003-2005, 2008 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Steve Lhomme <steve.lhomme@free.fr>
@@ -113,13 +112,15 @@ enum
 
 #define MKVD_TIMECODESCALE 1000000
 
-#define MKV_IS_ID( el, C ) ( el != NULL && typeid( *el ) == typeid( C ) )
+#define MKV_IS_ID( el, C ) ( el != NULL && (el->operator const EbmlId&()) == (C::ClassInfos.ClassId()) )
 #define MKV_CHECKED_PTR_DECL( name, type, src ) type * name = MKV_IS_ID(src, type) ? static_cast<type*>(src) : NULL
+#define MKV_CHECKED_PTR_DECL_CONST( name, type, src ) const type * name = MKV_IS_ID(src, type) ? static_cast<const type*>(src) : NULL
 
 
 using namespace LIBMATROSKA_NAMESPACE;
 
 void BlockDecode( demux_t *p_demux, KaxBlock *block, KaxSimpleBlock *simpleblock,
+                  KaxBlockAdditions *additions,
                   vlc_tick_t i_pts, vlc_tick_t i_duration, bool b_key_picture,
                   bool b_discardable_picture );
 
@@ -199,7 +200,7 @@ class mkv_track_t
         bool         b_pts_only;
 
         bool         b_no_duration;
-        uint64_t     i_default_duration;
+        vlc_tick_t   i_default_duration;
         float        f_timecodescale;
         vlc_tick_t   i_last_dts;
         uint64_t     i_skip_until_fpos; /*< any block before this fpos should be ignored */

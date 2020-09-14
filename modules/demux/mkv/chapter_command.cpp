@@ -2,7 +2,6 @@
  * chapter_command.cpp : matroska demuxer
  *****************************************************************************
  * Copyright (C) 2003-2004 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Steve Lhomme <steve.lhomme@free.fr>
@@ -33,7 +32,7 @@ void chapter_codec_cmds_c::AddCommand( const KaxChapterProcessCommand & command 
     uint32 codec_time = uint32(-1);
     for( size_t i = 0; i < command.ListSize(); i++ )
     {
-        if( MKV_CHECKED_PTR_DECL( p_cpt, KaxChapterProcessTime const, command[i] ) )
+        if( MKV_CHECKED_PTR_DECL_CONST( p_cpt, KaxChapterProcessTime, command[i] ) )
         {
             codec_time = static_cast<uint32>( *p_cpt );
             break;
@@ -42,7 +41,7 @@ void chapter_codec_cmds_c::AddCommand( const KaxChapterProcessCommand & command 
 
     for( size_t i = 0; i < command.ListSize(); i++ )
     {
-        if( MKV_CHECKED_PTR_DECL( p_cpd, KaxChapterProcessData const, command[i] ) )
+        if( MKV_CHECKED_PTR_DECL_CONST( p_cpd, KaxChapterProcessData, command[i] ) )
         {
             std::vector<KaxChapterProcessData*> *containers[] = {
                 &during_cmds, /* codec_time = 0 */
@@ -719,7 +718,7 @@ bool matroska_script_interpretor_c::Interpret( const binary * p_command, size_t 
         }
 
         std::string st = sz_command.substr( i+1, j-i-1 );
-        int64_t i_chapter_uid = atoi( st.c_str() );
+        int64_t i_chapter_uid = atoll( st.c_str() );
 
         virtual_segment_c *p_vsegment;
         virtual_chapter_c *p_vchapter = sys.FindChapter( i_chapter_uid, p_vsegment );

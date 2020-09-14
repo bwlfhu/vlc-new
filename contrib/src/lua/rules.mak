@@ -80,9 +80,9 @@ endif
 	cd $< && $(HOSTVARS) $(MAKE) install INSTALL_TOP="$(PREFIX)"
 ifdef HAVE_WIN32
 	cd $< && $(RANLIB) "$(PREFIX)/lib/liblua.a"
-	mkdir -p -- "$(PREFIX)/lib/pkgconfig"
-	cp $</etc/lua.pc "$(PREFIX)/lib/pkgconfig/"
 endif
+	mkdir -p -- "$(PREFIX)/lib/pkgconfig"
+	sed "s#^prefix=.*#prefix=$(PREFIX)#" $</etc/lua.pc > "$(PREFIX)/lib/pkgconfig/lua.pc"
 	touch $@
 
 .sum-luac: .sum-lua
@@ -94,13 +94,18 @@ LUACVARS=CPPFLAGS="-DLUA_DL_DLL"
 endif
 endif
 
+ifdef HAVE_CROSS_COMPILE
+# Remove the cross-compiler environment for the native compiler
+LUACVARS+=CFLAGS="" CPPFLAGS="" LDFLAGS=""
+endif
+
+# DO NOT use the same intermediate directory as the lua target
+luac: UNPACK_DIR=luac-$(LUA_VERSION)
 luac: lua-$(LUA_VERSION).tar.gz .sum-luac
-	# DO NOT use the same intermediate directory as the lua target
-	rm -Rf -- $@-$(LUA_VERSION) $@
-	mkdir -- $@-$(LUA_VERSION)
-	tar -x -v -z -C $@-$(LUA_VERSION) --strip-components=1 -f $<
-	(cd luac-$(LUA_VERSION) && patch -p1) < $(SRC)/lua/luac-32bits.patch
-	mv luac-$(LUA_VERSION) luac
+	$(RM) -Rf $@ $(UNPACK_DIR) && mkdir -p $(UNPACK_DIR)
+	tar xvzfo $< -C $(UNPACK_DIR) --strip-components=1
+	$(APPLY) $(SRC)/lua/luac-32bits.patch
+	$(MOVE)
 
 .luac: luac
 	cd $< && $(LUACVARS) $(MAKE) generic

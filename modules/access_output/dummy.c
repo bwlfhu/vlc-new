@@ -2,7 +2,6 @@
  * dummy.c
  *****************************************************************************
  * Copyright (C) 2001, 2002, 2004 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *
@@ -46,7 +45,7 @@ vlc_module_begin ()
     set_category( CAT_SOUT )
     set_subcategory( SUBCAT_SOUT_ACO )
     add_shortcut( "dummy" )
-    set_callbacks( Open, NULL )
+    set_callback( Open )
 vlc_module_end ()
 
 

@@ -30,6 +30,8 @@
 #include <vlc_common.h>
 #undef vlc_tick_sleep
 
+const char vlc_module_name[] = "test_timer";
+
 struct timer_data
 {
     vlc_timer_t timer;
@@ -105,8 +107,5 @@ int main (void)
     assert(ts >= VLC_TICK_FROM_MS(200));
 
     vlc_timer_destroy (data.timer);
-    vlc_cond_destroy (&data.wait);
-    vlc_mutex_destroy (&data.lock);
-
     return 0;
 }

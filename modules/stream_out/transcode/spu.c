@@ -2,7 +2,6 @@
  * spu.c: transcoding stream output module (spu)
  *****************************************************************************
  * Copyright (C) 2003-2009 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Gildas Bazin <gbazin@videolan.org>
@@ -96,8 +95,8 @@ int transcode_spu_init( sout_stream_t *p_stream, const es_format_t *p_fmt,
     static const struct decoder_owner_callbacks dec_cbs =
     {
         .spu = {
-            spu_new_buffer,
-            decoder_queue_sub,
+            .buffer_new = spu_new_buffer,
+            .queue = decoder_queue_sub,
         },
     };
     id->p_decoder->cbs = &dec_cbs;
@@ -116,7 +115,7 @@ int transcode_spu_init( sout_stream_t *p_stream, const es_format_t *p_fmt,
         /* Open encoder */
         /* Initialization of encoder format structures */
         assert(!id->encoder);
-        id->encoder = transcode_encoder_new( VLC_OBJECT(p_stream), &id->p_decoder->fmt_in );
+        id->encoder = transcode_encoder_new( sout_EncoderCreate(p_stream, sizeof(encoder_t)), &id->p_decoder->fmt_in );
         if( !id->encoder )
         {
             module_unneed( id->p_decoder, id->p_decoder->p_module );
@@ -160,11 +159,6 @@ int transcode_spu_init( sout_stream_t *p_stream, const es_format_t *p_fmt,
 void transcode_spu_clean( sout_stream_t *p_stream, sout_stream_id_sys_t *id)
 {
     VLC_UNUSED(p_stream);
-    /* Close decoder */
-    if( id->p_decoder->p_module )
-        module_unneed( id->p_decoder, id->p_decoder->p_module );
-    if( id->p_decoder->p_description )
-        vlc_meta_Delete( id->p_decoder->p_description );
 
     /* Close encoder */
     if( id->encoder )

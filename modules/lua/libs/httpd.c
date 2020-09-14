@@ -2,7 +2,6 @@
  * httpd.c: HTTPd wrapper
  *****************************************************************************
  * Copyright (C) 2007-2008 the VideoLAN team
- * $Id$
  *
  * Authors: Antoine Cellerier <dionoea at videolan tod org>
  *
@@ -82,7 +81,10 @@ static const char no_password_title[] = N_("VLC media player");
 static int vlclua_httpd_tls_host_new( lua_State *L )
 {
     vlc_object_t *p_this = vlclua_get_this( L );
-    httpd_host_t *p_host = vlc_http_HostNew( p_this );
+    char *psz_cert = var_InheritString( p_this, "http-cert" );
+    httpd_host_t *p_host = psz_cert == NULL ? vlc_http_HostNew( p_this )
+                                            : vlc_https_HostNew( p_this );
+    free( psz_cert );
     if( !p_host )
         return luaL_error( L, "Failed to create HTTP host" );
 

@@ -2,7 +2,6 @@
  * url.c: Test for url encoding/decoding stuff
  *****************************************************************************
  * Copyright (C) 2006 Rémi Denis-Courmont
- * $Id$
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -31,6 +30,8 @@
 #include <vlc_url.h>
 #include <vlc_strings.h>
 
+const char vlc_module_name[] = "test_url";
+
 static int exitcode = 0;
 
 static void test_compare(const char *in, const char *exp, const char *res)
@@ -38,18 +39,20 @@ static void test_compare(const char *in, const char *exp, const char *res)
     if (res == NULL)
     {
         if (exp != NULL)
-            fprintf(stderr, "\"%s\" returned NULL, expected \"%s\"", in, exp);
+            fprintf(stderr, "\"%s\" returned NULL, expected \"%s\"\n",
+                    in, exp);
         else
             return;
     }
     else
     {
         if (exp == NULL)
-            fprintf(stderr, "\"%s\" returned \"%s\", expected NULL", in, res);
+            fprintf(stderr, "\"%s\" returned \"%s\", expected NULL\n",
+                    in, res);
         else
         if (strcmp(res, exp))
-            fprintf(stderr, "\"%s\" returned \"%s\", expected \"%s\"\n", in,
-                    res, exp);
+            fprintf(stderr, "\"%s\" returned \"%s\", expected \"%s\"\n",
+                    in, res, exp);
         else
             return;
     }
@@ -72,7 +75,8 @@ static inline void test_decode (const char *in, const char *out)
 
 static inline void test_b64 (const char *in, const char *out)
 {
-    test (vlc_b64_encode, in, out);
+    test(vlc_b64_encode, in, out);
+    test(vlc_b64_decode, out, in);
 }
 
 static char *make_URI_def (const char *in)
@@ -96,13 +100,20 @@ static inline void test_current_directory_path (const char *in, const char *cwd,
     free(expected_result);
 }
 
-static void test_url_parse(const char *in, const char *protocol,
-                           const char *user, const char *pass,
-                           const char *host, unsigned port,
-                           const char *path, const char *option)
+#define test_url_parse(in, protocol, user, pass, host, port, path, option) \
+    test_url_parse_internal(in, false, protocol, user, pass, host, port, path, option)
+
+#define test_url_parse_fixup(in, protocol, user, pass, host, port, path, option) \
+    test_url_parse_internal(in, true, protocol, user, pass, host, port, path, option)
+
+static void test_url_parse_internal(const char *in, bool fixup,
+                                    const char *protocol,
+                                    const char *user, const char *pass,
+                                    const char *host, unsigned port,
+                                    const char *path, const char *option)
 {
     vlc_url_t url;
-    int ret = vlc_UrlParse(&url, in);
+    int ret = fixup ? vlc_UrlParseFixup(&url, in) : vlc_UrlParse(&url, in);
 
     /* XXX: only checking that the port-part is parsed correctly, and
      *      equal to 0, is currently not supported due to the below. */
@@ -119,13 +130,13 @@ static void test_url_parse(const char *in, const char *protocol,
         return;
     }
 
-    test_compare(in, url.psz_protocol, protocol);
-    test_compare(in, url.psz_username, user);
-    test_compare(in, url.psz_password, pass);
+    test_compare(in, protocol, url.psz_protocol);
+    test_compare(in, user, url.psz_username);
+    test_compare(in, pass, url.psz_password);
 
     if (ret != 0 && errno == ENOSYS)
     {
-        test_compare(in, url.psz_host, NULL);
+        test_compare(in, NULL, url.psz_host);
         exitcode = 77;
     }
     else
@@ -138,8 +149,8 @@ static void test_url_parse(const char *in, const char *protocol,
         exit(2);
     }
 
-    test_compare(in, url.psz_path, path);
-    test_compare(in, url.psz_option, option);
+    test_compare(in, path, url.psz_path);
+    test_compare(in, option, url.psz_option);
     vlc_UrlClean(&url);
 }
 
@@ -151,6 +162,16 @@ static char *vlc_uri_resolve_rfc3986_test(const char *in)
 static void test_rfc3986(const char *reference, const char *expected)
 {
     test(vlc_uri_resolve_rfc3986_test, reference, expected);
+}
+
+static char *vlc_uri_resolve_separators_test(const char *in)
+{
+    return vlc_uri_resolve("file:///a/b/c//d.ext", in);
+}
+
+static void test_separators(const char *reference, const char *expected)
+{
+    test(vlc_uri_resolve_separators_test, reference, expected);
 }
 
 int main (void)
@@ -183,6 +204,7 @@ int main (void)
     test_b64 ("foobar", "Zm9vYmFy");
 
     /* Path test */
+    test_path("", NULL);
 #ifndef _WIN32
     test_path ("/", "file:///");
     test_path ("/home/john/", "file:///home/john/");
@@ -209,7 +231,7 @@ int main (void)
     }
 
     char buf[256];
-    char *tmpdir = getcwd(buf, sizeof (buf) / sizeof (*buf));
+    char *tmpdir = getcwd(buf, ARRAY_SIZE (buf));
     if (tmpdir == NULL)
     {
         perror("getcwd");
@@ -218,7 +240,6 @@ int main (void)
 
     test_current_directory_path ("movie.ogg", tmpdir, "movie.ogg");
     test_current_directory_path (".", tmpdir, ".");
-    test_current_directory_path ("", tmpdir, "");
 #endif
 
     /*val = fchdir (fd);
@@ -305,6 +326,12 @@ int main (void)
     test_url_parse("http://example.com:-123", NULL, NULL, NULL, NULL, 0, NULL, NULL );
     test_url_parse("http://example.com:-4294967298", NULL, NULL, NULL, NULL, 0, NULL, NULL );
     test_url_parse("http://example.com:-18446744073709551615", NULL, NULL, NULL, NULL, 0, NULL, NULL );
+    test_url_parse("http://user%/Oath", "http", NULL, NULL, NULL, 0, "/Oath",
+                   NULL);
+
+    /* URIs to fixup */
+    test_url_parse("smb://SERVER:445/SHARE/My file.mp3", "smb", NULL, NULL, "SERVER", 445, NULL, NULL);
+    test_url_parse_fixup("smb://SERVER:445/SHARE/My file.mp3", "smb", NULL, NULL, "SERVER", 445, "/SHARE/My%20file.mp3", NULL);
 
     /* Reference test cases for reference URI resolution */
     static const char *rfc3986_cases[] =
@@ -358,6 +385,16 @@ int main (void)
 
     for (size_t i = 0; i < ARRAY_SIZE(rfc3986_cases); i += 2)
         test_rfc3986(rfc3986_cases[i], rfc3986_cases[i + 1]);
+    static const char* separators_patterns[] = {
+        "../",                      "file:///a/b/",
+        "./",                       "file:///a/b/c/",
+        "../../../../../../../",    "file:///",
+        "..///////////////",        "file:///a/b/",
+        ".///////////////",         "file:///a/b/c/",
+        "..//..//",                 "file:///a/",
+    };
+    for (size_t i = 0; i < ARRAY_SIZE(separators_patterns); i += 2)
+        test_separators(separators_patterns[i], separators_patterns[i + 1]);
 
     /* Check that fixup does not mangle valid URIs */
     static const char *valid_uris[] =

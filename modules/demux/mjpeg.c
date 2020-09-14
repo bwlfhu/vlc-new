@@ -2,7 +2,6 @@
  * mjpeg.c : demuxes mjpeg webcam http streams
  *****************************************************************************
  * Copyright (C) 2004 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Henry Jen (slowhog) <henryjen@ztune.net>
  *          Derk-Jan Hartman (thedj)
@@ -51,7 +50,7 @@ vlc_module_begin ()
     set_shortname( "MJPEG")
     set_description( N_("M-JPEG camera demuxer") )
     set_capability( "demux", 5 )
-    set_callbacks( Open, NULL )
+    set_callback( Open )
     set_category( CAT_INPUT )
     set_subcategory( SUBCAT_INPUT_DEMUX )
     add_float( "mjpeg-fps", 0.0, FPS_TEXT, FPS_LONGTEXT, false )
@@ -152,7 +151,7 @@ static char* GetLine( demux_t *p_demux, int *p_pos )
     {
         i--;
     }
-    p_line = malloc( i + 1 );
+    p_line = vlc_obj_malloc( VLC_OBJECT(p_demux), i + 1 );
     if( unlikely( p_line == NULL ) )
         return NULL;
     strncpy ( p_line, (char*)p_buf, i );
@@ -215,7 +214,7 @@ static bool CheckMimeHeader( demux_t *p_demux, int *p_header_size )
                 msg_Warn( p_demux, "separator %s does not match %s", psz_line,
                           p_sys->psz_separator );
             }
-            free( psz_line );
+            vlc_obj_free( VLC_OBJECT(p_demux), psz_line );
         }
     }
 
@@ -240,7 +239,7 @@ static bool CheckMimeHeader( demux_t *p_demux, int *p_header_size )
         {
             msg_Dbg( p_demux, "discard MIME header: %s", psz_line );
         }
-        free( psz_line );
+        vlc_obj_free( VLC_OBJECT(p_demux), psz_line );
         psz_line = GetLine( p_demux, &i_pos );
     }
 
@@ -250,7 +249,7 @@ static bool CheckMimeHeader( demux_t *p_demux, int *p_header_size )
         return false;
     }
 
-    free( psz_line );
+    vlc_obj_free( VLC_OBJECT(p_demux), psz_line );
 
     *p_header_size = i_pos;
     return b_jpeg;
@@ -267,7 +266,7 @@ static int SendBlock( demux_t *p_demux, int i )
         return VLC_DEMUXER_EOF;
     }
 
-    if( p_sys->i_frame_length )
+    if( p_sys->i_frame_length != VLC_TICK_INVALID )
     {
         p_block->i_pts = p_sys->i_time;
         p_sys->i_time += p_sys->i_frame_length;
@@ -366,7 +365,7 @@ static int Open( vlc_object_t * p_this )
     /* Frame rate */
     float f_fps = var_InheritFloat( p_demux, "mjpeg-fps" );
 
-    p_sys->i_still_end = 0;
+    p_sys->i_still_end = VLC_TICK_INVALID;
     if( demux_IsPathExtension( p_demux, ".jpeg" ) ||
         demux_IsPathExtension( p_demux, ".jpg" ) )
     {
@@ -378,10 +377,11 @@ static int Open( vlc_object_t * p_this )
     }
     else
         p_sys->b_still = false;
-    p_sys->i_frame_length = f_fps ? (CLOCK_FREQ / f_fps) : 0;
+    p_sys->i_frame_length = f_fps ? vlc_tick_rate_duration(f_fps) : VLC_TICK_INVALID;
 
     es_format_Init( &p_sys->fmt, VIDEO_ES, VLC_CODEC_MJPG );
 
+    p_sys->fmt.i_id = 0;
     p_sys->p_es = es_out_Add( p_demux->out, &p_sys->fmt );
     if( unlikely(p_sys->p_es == NULL) )
         return VLC_ENOMEM;
@@ -400,11 +400,11 @@ static int MjpgDemux( demux_t *p_demux )
     demux_sys_t *p_sys = p_demux->p_sys;
     int i;
 
-    if( p_sys->b_still && p_sys->i_still_end )
+    if( p_sys->b_still && p_sys->i_still_end != VLC_TICK_INVALID )
     {
         /* Still frame, wait until the pause delay is gone */
         vlc_tick_wait( p_sys->i_still_end );
-        p_sys->i_still_end = 0;
+        p_sys->i_still_end = VLC_TICK_INVALID;
         return VLC_DEMUXER_SUCCESS;
     }
 

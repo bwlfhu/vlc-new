@@ -2,7 +2,6 @@
  * mosaic_bridge.c:
  *****************************************************************************
  * Copyright (C) 2004-2007 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Antoine Cellerier <dionoea@videolan.org>
  *          Christophe Massiot <massiot@via.ecp.fr>
@@ -57,7 +56,7 @@ typedef struct
     char *psz_id;
     bool b_inited;
 
-    int i_chroma; /* force image format chroma */
+    vlc_fourcc_t i_chroma; /* force image format chroma */
 
     filter_chain_t *p_vf2;
 } sout_stream_sys_t;
@@ -65,8 +64,7 @@ typedef struct
 struct decoder_owner
 {
     decoder_t dec;
-    /* Current format in use by the output */
-    video_format_t video;
+    vlc_decoder_device *dec_dev;
     sout_stream_t *p_stream;
 };
 
@@ -85,10 +83,8 @@ static void  Del( sout_stream_t *, void * );
 static int   Send( sout_stream_t *, void *, block_t * );
 
 static void decoder_queue_video( decoder_t *p_dec, picture_t *p_pic );
-inline static int video_update_format_decoder( decoder_t *p_dec );
-inline static picture_t *video_new_buffer_decoder( decoder_t * );
-inline static picture_t *video_new_buffer_filter( filter_t * );
-static int video_update_format( vlc_object_t *, video_format_t *, es_format_t * );
+static int video_update_format_decoder( decoder_t *p_dec, vlc_video_context * );
+static picture_t *video_new_buffer_filter( filter_t * );
 
 static int HeightCallback( vlc_object_t *, char const *,
                            vlc_value_t, vlc_value_t, void * );
@@ -144,7 +140,7 @@ static int yCallback( vlc_object_t *, char const *,
 vlc_module_begin ()
     set_shortname( N_( "Mosaic bridge" ) )
     set_description(N_("Mosaic bridge stream output") )
-    set_capability( "sout stream", 0 )
+    set_capability( "sout output", 0 )
     add_shortcut( "mosaic-bridge" )
 
     add_string( CFG_PREFIX "id", "Id", ID_TEXT, ID_LONGTEXT,
@@ -256,6 +252,21 @@ static int Open( vlc_object_t *p_this )
     return VLC_SUCCESS;
 }
 
+static vlc_decoder_device * MosaicHoldDecoderDevice( struct decoder_owner *p_owner )
+{
+    if ( p_owner->dec_dev == NULL )
+    {
+        p_owner->dec_dev = vlc_decoder_device_Create(&p_owner->dec.obj, NULL);
+    }
+    return p_owner->dec_dev ? vlc_decoder_device_Hold(p_owner->dec_dev) : NULL;
+}
+
+static vlc_decoder_device * video_get_decoder_device( decoder_t *p_dec )
+{
+    struct decoder_owner *p_owner = dec_get_owner( p_dec );
+    return MosaicHoldDecoderDevice(p_owner);
+}
+
 /*****************************************************************************
  * Close
  *****************************************************************************/
@@ -276,6 +287,24 @@ static void Close( vlc_object_t * p_this )
     free( p_sys );
 }
 
+static void ReleaseDecoder( decoder_t *p_dec )
+{
+    struct decoder_owner *p_owner = dec_get_owner( p_dec );
+    if ( p_owner->dec_dev )
+    {
+        vlc_decoder_device_Release( p_owner->dec_dev );
+        p_owner->dec_dev = NULL;
+    }
+    decoder_Destroy( p_dec );
+}
+
+static vlc_decoder_device * video_filter_hold_device(vlc_object_t *o, void *sys)
+{
+    VLC_UNUSED(o);
+    struct decoder_owner *p_owner = sys;
+    return MosaicHoldDecoderDevice(p_owner);
+}
+
 static void *Add( sout_stream_t *p_stream, const es_format_t *p_fmt )
 {
     sout_stream_sys_t *p_sys = p_stream->p_sys;
@@ -292,25 +321,47 @@ static void *Add( sout_stream_t *p_stream, const es_format_t *p_fmt )
     if( !p_owner )
         return NULL;
     p_sys->p_decoder = &p_owner->dec;
-    p_sys->p_decoder->p_module = NULL;
-    p_sys->p_decoder->fmt_in = *p_fmt;
+    decoder_Init( p_sys->p_decoder, p_fmt );
+
     p_sys->p_decoder->b_frame_drop_allowed = true;
     p_sys->p_decoder->fmt_out = p_sys->p_decoder->fmt_in;
     p_sys->p_decoder->fmt_out.i_extra = 0;
     p_sys->p_decoder->fmt_out.p_extra = 0;
     p_sys->p_decoder->pf_decode = NULL;
 
+    /* Create user specified video filters */
+    static const struct filter_video_callbacks cbs =
+    {
+        video_new_buffer_filter, video_filter_hold_device,
+    };
+
+    psz_chain = var_GetNonEmptyString( p_stream, CFG_PREFIX "vfilter" );
+    msg_Dbg( p_stream, "psz_chain: '%s'", psz_chain ? psz_chain : "");
+    if( psz_chain )
+    {
+        filter_owner_t owner = {
+            .video = &cbs,
+            .sys = p_owner,
+        };
+
+        p_sys->p_vf2 = filter_chain_NewVideo( p_stream, false, &owner );
+        free( psz_chain );
+    }
+    else
+    {
+        p_sys->p_vf2 = NULL;
+    }
+
     static const struct decoder_owner_callbacks dec_cbs =
     {
         .video = {
-            video_update_format_decoder,
-            video_new_buffer_decoder,
-            decoder_queue_video,
+            .get_device = video_get_decoder_device,
+            .format_update = video_update_format_decoder,
+            .queue = decoder_queue_video,
         },
     };
     p_sys->p_decoder->cbs = &dec_cbs;
 
-    p_owner->video = p_fmt->video;
     p_owner->p_stream = p_stream;
     //p_sys->p_decoder->p_cfg = p_sys->p_video_cfg;
 
@@ -320,7 +371,7 @@ static void *Add( sout_stream_t *p_stream, const es_format_t *p_fmt )
     if( !p_sys->p_decoder->p_module )
     {
         msg_Err( p_stream, "cannot find decoder" );
-        vlc_object_release( p_sys->p_decoder );
+        ReleaseDecoder( p_sys->p_decoder );
         return NULL;
     }
 
@@ -330,7 +381,7 @@ static void *Add( sout_stream_t *p_stream, const es_format_t *p_fmt )
     p_bridge = GetBridge( p_stream );
     if ( p_bridge == NULL )
     {
-        vlc_object_t *p_libvlc = VLC_OBJECT( p_stream->obj.libvlc );
+        vlc_object_t *p_libvlc = VLC_OBJECT( vlc_object_instance(p_stream) );
         vlc_value_t val;
 
         p_bridge = xmalloc( sizeof( bridge_t ) );
@@ -382,39 +433,6 @@ static void *Add( sout_stream_t *p_stream, const es_format_t *p_fmt )
 
     msg_Dbg( p_stream, "mosaic bridge id=%s pos=%d", p_es->psz_id, i );
 
-    /* Create user specified video filters */
-    static const struct filter_video_callbacks cbs =
-    {
-        .buffer_new = video_new_buffer_filter,
-    };
-
-    psz_chain = var_GetNonEmptyString( p_stream, CFG_PREFIX "vfilter" );
-    msg_Dbg( p_stream, "psz_chain: %s", psz_chain );
-    if( psz_chain )
-    {
-        filter_owner_t owner = {
-            .video = &cbs,
-            .sys = p_owner,
-        };
-
-        p_sys->p_vf2 = filter_chain_NewVideo( p_stream, false, &owner );
-        if (p_sys->p_vf2 != NULL)
-        {
-            es_format_t fmt;
-            es_format_Copy( &fmt, &p_sys->p_decoder->fmt_out );
-            if( p_sys->i_chroma )
-                fmt.video.i_chroma = p_sys->i_chroma;
-            filter_chain_Reset( p_sys->p_vf2, &fmt, &fmt );
-            es_format_Clean( &fmt );
-            filter_chain_AppendFromString( p_sys->p_vf2, psz_chain );
-        }
-        free( psz_chain );
-    }
-    else
-    {
-        p_sys->p_vf2 = NULL;
-    }
-
     return p_sys;
 }
 
@@ -430,15 +448,7 @@ static void Del( sout_stream_t *p_stream, void *id )
     if( !p_sys->b_inited )
         return;
 
-    if( p_sys->p_decoder != NULL )
-    {
-        if( p_sys->p_decoder->p_module )
-            module_unneed( p_sys->p_decoder, p_sys->p_decoder->p_module );
-        if( p_sys->p_decoder->p_description )
-            vlc_meta_Delete( p_sys->p_decoder->p_description );
-
-        vlc_object_release( p_sys->p_decoder );
-    }
+    ReleaseDecoder( p_sys->p_decoder );
 
     /* Destroy user specified video filters */
     if( p_sys->p_vf2 )
@@ -468,7 +478,7 @@ static void Del( sout_stream_t *p_stream, void *id )
 
     if ( b_last_es )
     {
-        vlc_object_t *p_libvlc = VLC_OBJECT( p_stream->obj.libvlc );
+        vlc_object_t *p_libvlc = VLC_OBJECT( vlc_object_instance(p_stream) );
         for ( i = 0; i < p_bridge->i_es_num; i++ )
             free( p_bridge->pp_es[i] );
         free( p_bridge->pp_es );
@@ -498,13 +508,7 @@ static void decoder_queue_video( decoder_t *p_dec, picture_t *p_pic )
     {
         video_format_t fmt_out;
 
-        memset( &fmt_out, 0, sizeof(video_format_t) );
-
-
-        if( p_sys->i_chroma )
-            fmt_out.i_chroma = p_sys->i_chroma;
-        else
-            fmt_out.i_chroma = VLC_CODEC_I420;
+        video_format_Init( &fmt_out, p_sys->i_chroma ? p_sys->i_chroma : VLC_CODEC_I420 );
 
         const unsigned i_fmt_in_aspect =
             (int64_t)VOUT_ASPECT_FACTOR *
@@ -534,6 +538,7 @@ static void decoder_queue_video( decoder_t *p_dec, picture_t *p_pic )
 
         p_new_pic = image_Convert( p_sys->p_image,
                                    p_pic, p_fmt_in, &fmt_out );
+        video_format_Clean( &fmt_out );
         if( p_new_pic == NULL )
         {
             msg_Err( p_stream, "image conversion failed" );
@@ -544,11 +549,11 @@ static void decoder_queue_video( decoder_t *p_dec, picture_t *p_pic )
     else
     {
         /* TODO: chroma conversion if needed */
+        video_format_t pic_fmt = p_pic->format;
+        pic_fmt.i_sar_num = p_fmt_in->i_sar_num;
+        pic_fmt.i_sar_den = p_fmt_in->i_sar_den;
 
-        p_new_pic = picture_New( p_pic->format.i_chroma,
-                                 p_pic->format.i_width, p_pic->format.i_height,
-                                 p_fmt_in->i_sar_num,
-                                 p_fmt_in->i_sar_den );
+        p_new_pic = picture_NewFromFormat( &pic_fmt );
         if( !p_new_pic )
         {
             picture_Release( p_pic );
@@ -586,58 +591,37 @@ static int Send( sout_stream_t *p_stream, void *id, block_t *p_buffer )
     return ret == VLCDEC_SUCCESS ? VLC_SUCCESS : VLC_EGENERIC;
 }
 
-inline static int video_update_format_decoder( decoder_t *p_dec )
+static int video_update_format_decoder( decoder_t *p_dec, vlc_video_context *vctx )
 {
     struct decoder_owner *p_owner = dec_get_owner( p_dec );
-    return video_update_format( VLC_OBJECT( p_dec ),
-                                &p_owner->video, &p_dec->fmt_out );
-}
-
-inline static picture_t *video_new_buffer_decoder( decoder_t *p_dec )
-{
-    return picture_NewFromFormat( &p_dec->fmt_out.video );
-}
-
-inline static picture_t *video_new_buffer_filter( filter_t *p_filter )
-{
-    struct decoder_owner *p_owner = p_filter->owner.sys;
-    if( video_update_format( VLC_OBJECT( p_filter ),
-                             &p_owner->video, &p_filter->fmt_out ) ) {
-        msg_Warn( p_filter, "can't get output picture" );
-        return NULL;
-    }
-    return picture_NewFromFormat( &p_filter->fmt_out.video );
-}
-
-static int video_update_format( vlc_object_t *p_this,
-                                video_format_t *video, es_format_t *fmt_out )
-{
-    VLC_UNUSED(p_this);
-    if( fmt_out->video.i_width != video->i_width ||
-        fmt_out->video.i_height != video->i_height ||
-        fmt_out->video.i_chroma != video->i_chroma ||
-        (int64_t)fmt_out->video.i_sar_num * video->i_sar_den !=
-        (int64_t)fmt_out->video.i_sar_den * video->i_sar_num )
+    sout_stream_sys_t *p_sys = p_owner->p_stream->p_sys;
+    if ( p_sys->p_vf2 )
     {
-        vlc_ureduce( &fmt_out->video.i_sar_num,
-                     &fmt_out->video.i_sar_den,
-                     fmt_out->video.i_sar_num,
-                     fmt_out->video.i_sar_den, 0 );
-
-        if( !fmt_out->video.i_visible_width ||
-            !fmt_out->video.i_visible_height )
+        // update the filter after the format changed/is known
+        char *psz_chain = var_GetNonEmptyString( p_owner->p_stream, CFG_PREFIX "vfilter" );
+        msg_Dbg( p_owner->p_stream, "update filter: '%s'",
+                 psz_chain ?  psz_chain : "" );
+        if( psz_chain )
         {
-            fmt_out->video.i_visible_width = fmt_out->video.i_width;
-            fmt_out->video.i_visible_height = fmt_out->video.i_height;
+            es_format_t fmt;
+            es_format_InitFromVideo( &fmt, &p_dec->fmt_out.video );
+            if( p_sys->i_chroma )
+            {
+                fmt.video.i_chroma = p_sys->i_chroma;
+                vctx = NULL; // CPU chroma, no video context
+            }
+            filter_chain_Reset( p_sys->p_vf2, &fmt, vctx, &fmt );
+            es_format_Clean( &fmt );
+            filter_chain_AppendFromString( p_sys->p_vf2, psz_chain );
+            free( psz_chain );
         }
-
-        fmt_out->video.i_chroma = fmt_out->i_codec;
-        *video = fmt_out->video;
     }
-
-    /* */
-    fmt_out->video.i_chroma = fmt_out->i_codec;
     return 0;
+}
+
+static picture_t *video_new_buffer_filter( filter_t *p_filter )
+{
+    return picture_NewFromFormat( &p_filter->fmt_out.video );
 }
 
 /**********************************************************************

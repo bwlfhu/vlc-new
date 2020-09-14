@@ -2,7 +2,6 @@
  * vlc_vout_display.h: vout_display_t definitions
  *****************************************************************************
  * Copyright (C) 2009 Laurent Aimar
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir _AT_ videolan _DOT_ org>
  *
@@ -49,50 +48,80 @@ typedef struct vout_display_sys_t vout_display_sys_t;
 typedef struct vout_display_owner_t vout_display_owner_t;
 
 /**
- * Possible alignments for vout_display.
+ * \defgroup video_align Video alignment
+ * @{
  */
-typedef enum
-{
-    VOUT_DISPLAY_ALIGN_CENTER,
-    /* */
-    VOUT_DISPLAY_ALIGN_LEFT,
-    VOUT_DISPLAY_ALIGN_RIGHT,
-    /* */
-    VOUT_DISPLAY_ALIGN_TOP,
-    VOUT_DISPLAY_ALIGN_BOTTOM,
-} vout_display_align_t;
+#define VLC_VIDEO_ALIGN_CENTER 0
+#define VLC_VIDEO_ALIGN_LEFT   1
+#define VLC_VIDEO_ALIGN_RIGHT  2
+#define VLC_VIDEO_ALIGN_TOP    1
+#define VLC_VIDEO_ALIGN_BOTTOM 2
 
 /**
- * Initial/Current configuration for a vout_display_t
+ * Video alignment within the display.
  */
-typedef struct {
+typedef struct vlc_video_align {
+    /**
+     * Horizontal alignment.
+     *
+     * This must be one of \ref VLC_VIDEO_ALIGN_CENTER,
+     * \ref VLC_VIDEO_ALIGN_LEFT or \ref VLC_VIDEO_ALIGN_RIGHT.
+     */
+    char horizontal;
+
+    /**
+     * Vectical alignment.
+     *
+     * This must be one of \ref VLC_VIDEO_ALIGN_CENTER,
+     * \ref VLC_VIDEO_ALIGN_TOP or \ref VLC_VIDEO_ALIGN_BOTTOM.
+     */
+    char vertical;
+} vlc_video_align_t;
+/** @} */
+
+/**
+ * User configuration for a video output display (\ref vout_display_t)
+ *
+ * This primarily controls the size of the display area within the video
+ * window, as follows:
+ * - If \ref is_display_filled is set,
+ *   the video size is fitted to the display size.
+ * - If \ref window size is valid, the video size is set to the window size,
+ * - Otherwise, the video size is determined from the original video format,
+ *   multiplied by the zoom factor.
+ */
+typedef struct vout_display_cfg {
     struct vout_window_t *window; /**< Window */
-#if defined(_WIN32) || defined(__OS2__)
+#if defined(__OS2__)
     bool is_fullscreen VLC_DEPRECATED;  /* Is the display fullscreen */
 #endif
 
-    /* Display properties */
+    /** Display properties */
     struct {
-        /* Display size */
-        unsigned  width;
-        unsigned  height;
-
-        /* Display SAR */
-        vlc_rational_t sar;
+        unsigned width; /**< Requested display pixel width (0 by default). */
+        unsigned height; /**< Requested display pixel height (0 by default). */
+        vlc_rational_t sar; /**< Requested sample aspect ratio */
     } display;
 
-    /* Alignment of the picture inside the display */
+    /**
+     * Window properties
+     *
+     * Should be ignored from display modules.
+     */
     struct {
-        int horizontal;
-        int vertical;
-    } align;
+        /** Current window width */
+        unsigned width;
+        /** Current window height */
+        unsigned height;
+    } window_props;
 
-    /* Do we fill up the display with the video */
+    /** Alignment of the video within the window */
+    vlc_video_align_t align;
+
+    /** Automatic scaling/fitting flag */
     bool is_display_filled;
 
-    /* Zoom to use
-     * It will be applied to the whole display if b_display_filled is set, otherwise
-     * only on the video source */
+    /** Zoom ratio */
     struct {
         unsigned num;
         unsigned den;
@@ -109,81 +138,82 @@ typedef struct {
  *
  */
 typedef struct {
-    bool is_slow;                           /* The picture memory has slow read/write */
-    bool has_double_click;                  /* Is double-click generated */
-    bool has_pictures_invalid;              /* Will VOUT_DISPLAY_EVENT_PICTURES_INVALID be used */
+    bool can_scale_spu;                     /* Handles subpictures with a non default zoom factor */
     const vlc_fourcc_t *subpicture_chromas; /* List of supported chromas for subpicture rendering. */
 } vout_display_info_t;
 
 /**
  * Control query for vout_display_t
  */
-enum {
-    /* Ask to reset the internal buffers after a VOUT_DISPLAY_EVENT_PICTURES_INVALID
-     * request.
+enum vout_display_query {
+    /**
+     * Asks to reset the internal buffers and picture format.
+     *
+     * This occurs after a
+     * \ref VOUT_DISPLAY_CHANGE_DISPLAY_SIZE,
+     * \ref VOUT_DISPLAY_CHANGE_DISPLAY_FILLED,
+     * \ref VOUT_DISPLAY_CHANGE_ZOOM,
+     * \ref VOUT_DISPLAY_CHANGE_SOURCE_ASPECT or
+     * \ref VOUT_DISPLAY_CHANGE_SOURCE_CROP
+     * control query returns an error.
      */
-    VOUT_DISPLAY_RESET_PICTURES,
+    VOUT_DISPLAY_RESET_PICTURES, /* video_format_t * */
 
-#if defined(_WIN32) || defined(__OS2__)
+#if defined(__OS2__)
     /* Ask the module to acknowledge/refuse the fullscreen state change after
      * being requested (externally or by VOUT_DISPLAY_EVENT_FULLSCREEN */
-    VOUT_DISPLAY_CHANGE_FULLSCREEN VLC_DEPRECATED_ENUM,     /* bool fs */
+    VOUT_DISPLAY_CHANGE_FULLSCREEN VLC_DEPRECATED_ENUM,
     /* Ask the module to acknowledge/refuse the window management state change
      * after being requested externally or by VOUT_DISPLAY_WINDOW_STATE */
-    VOUT_DISPLAY_CHANGE_WINDOW_STATE VLC_DEPRECATED_ENUM,   /* unsigned state */
+    VOUT_DISPLAY_CHANGE_WINDOW_STATE VLC_DEPRECATED_ENUM,
 #endif
-    /* Ask the module to acknowledge the display size change */
-    VOUT_DISPLAY_CHANGE_DISPLAY_SIZE,   /* const vout_display_cfg_t *p_cfg */
+    /**
+     * Notifies a change in display size.
+     *
+     * \retval VLC_SUCCESS if the display handled the change
+     * \retval VLC_EGENERIC if a \ref VOUT_DISPLAY_RESET_PICTURES request
+     *                      is necessary
+     */
+    VOUT_DISPLAY_CHANGE_DISPLAY_SIZE,
 
-    /* Ask the module to acknowledge/refuse fill display state change after
-     * being requested externally */
-    VOUT_DISPLAY_CHANGE_DISPLAY_FILLED, /* const vout_display_cfg_t *p_cfg */
+    /**
+     * Notifies a change of the display fill display flag by the user.
+     *
+     * \retval VLC_SUCCESS if the display handled the change
+     * \retval VLC_EGENERIC if a \ref VOUT_DISPLAY_RESET_PICTURES request
+     *                      is necessary
+     */
+    VOUT_DISPLAY_CHANGE_DISPLAY_FILLED,
 
-    /* Ask the module to acknowledge/refuse zoom change after being requested
-     * externally */
-    VOUT_DISPLAY_CHANGE_ZOOM, /* const vout_display_cfg_t *p_cfg */
+    /**
+     * Notifies a change of the user zoom factor.
+     *
+     * \retval VLC_SUCCESS if the display handled the change
+     * \retval VLC_EGENERIC if a \ref VOUT_DISPLAY_RESET_PICTURES request
+     *                      is necessary
+     */
+    VOUT_DISPLAY_CHANGE_ZOOM,
 
-    /* Ask the module to acknowledge/refuse source aspect ratio after being
-     * requested externally */
+    /**
+     * Notifies a change of the sample aspect ratio.
+     *
+     * \retval VLC_SUCCESS if the display handled the change
+     * \retval VLC_EGENERIC if a \ref VOUT_DISPLAY_RESET_PICTURES request
+     *                      is necessary
+     */
     VOUT_DISPLAY_CHANGE_SOURCE_ASPECT,
 
-    /* Ask the module to acknowledge/refuse source crop change after being
-     * requested externally.
-     * The cropping requested is stored by video_format_t::i_x/y_offset and
-     * video_format_t::i_visible_width/height */
-    VOUT_DISPLAY_CHANGE_SOURCE_CROP,
-
-    /* Ask the module to acknowledge/refuse VR/360° viewing direction after
-     * being requested externally */
-    VOUT_DISPLAY_CHANGE_VIEWPOINT,   /* const vout_display_cfg_t *p_cfg */
-};
-
-/**
- * Event from vout_display_t
- *
- * Events modifiying the state may be sent multiple times.
- * Only the transition will be retained and acted upon.
- */
-enum {
-    /* TODO:
-     * ZOOM ? DISPLAY_FILLED ? ON_TOP ?
+    /**
+     * Notifies a change of the source cropping.
+     *
+     * The cropping requested is stored by source video_format_t::i_x/y_offset
+     * and video_format_t::i_visible_width/height
+     *
+     * \retval VLC_SUCCESS if the display handled the change
+     * \retval VLC_EGENERIC if a \ref VOUT_DISPLAY_RESET_PICTURES request
+     *                      is necessary
      */
-    /* */
-    VOUT_DISPLAY_EVENT_PICTURES_INVALID,    /* The buffer are now invalid and need to be changed */
-
-#if defined(_WIN32) || defined(__OS2__)
-    VOUT_DISPLAY_EVENT_FULLSCREEN,
-    VOUT_DISPLAY_EVENT_WINDOW_STATE,
-#endif
-
-    /* Mouse event */
-    VOUT_DISPLAY_EVENT_MOUSE_MOVED,
-    VOUT_DISPLAY_EVENT_MOUSE_PRESSED,
-    VOUT_DISPLAY_EVENT_MOUSE_RELEASED,
-    VOUT_DISPLAY_EVENT_MOUSE_DOUBLE_CLICK,
-
-    /* VR navigation */
-    VOUT_DISPLAY_EVENT_VIEWPOINT_MOVED,
+    VOUT_DISPLAY_CHANGE_SOURCE_CROP,
 };
 
 /**
@@ -205,40 +235,69 @@ struct vout_display_owner_t {
      * Be careful, it does not ensure correct serialization if it is used
      * from multiple threads.
      */
-    void            (*event)(vout_display_t *, int, va_list);
+    void (*viewpoint_moved)(void *sys, const vlc_viewpoint_t *vp);
 };
 
+/**
+ * "vout display" open callback
+ *
+ * @param vd vout display context
+ * @param cfg Initial and current configuration.
+ * @param fmtp By default, it is equal to vd->source except for the aspect
+ * ratio which is undefined(0) and is ignored. It can be changed by the module
+ * to request a different format.
+ * @param context XXX: to be defined.
+ * @return VLC_SUCCESS or a VLC error code
+ */
+typedef int (*vout_display_open_cb)(vout_display_t *vd,
+                                    const vout_display_cfg_t *cfg,
+                                    video_format_t *fmtp,
+                                    vlc_video_context *context);
+
+#define set_callback_display(activate, priority) \
+    { \
+        vout_display_open_cb open__ = activate; \
+        (void) open__; \
+        set_callback(activate) \
+    } \
+    set_capability( "vout display", priority )
+
+
 struct vout_display_t {
-    struct vlc_common_members obj;
+    struct vlc_object_t obj;
 
-    /* Module */
-    module_t *module;
-
-    /* Initial and current configuration.
-     * You cannot modify it directly, you must use the appropriate events.
+    /**
+     * User configuration.
      *
-     * It reflects the current values, i.e. after the event has been accepted
-     * and applied/configured if needed.
+     * This cannot be modified directly. It reflects the current values.
      */
     const vout_display_cfg_t *cfg;
 
-    /* video source format.
+    /**
+     * Source video format.
      *
+     * This is the format of the video that is being displayed (after decoding
+     * and filtering). It cannot be modified.
+     *
+     * \note
      * Cropping is not requested while in the open function.
-     * You cannot change it.
      */
-    video_format_t source;
+    const video_format_t *source;
 
-    /* picture_t format.
+    /**
+     * Picture format.
      *
-     * You can only change it inside the module open function to
-     * match what you want, and when a VOUT_DISPLAY_RESET_PICTURES control
-     * request is made and succeeds.
+     * This is the format of the pictures that are supplied to the
+     * \ref prepare and \ref display callbacks. Ideally, it should be identical
+     * or as close as possible as \ref source.
+     *
+     * This can only be changed from the display module activation callback,
+     * or within a VOUT_DISPLAY_RESET_PICTURES control request.
      *
      * By default, it is equal to ::source except for the aspect ratio
      * which is undefined(0) and is ignored.
      */
-    video_format_t fmt;
+    const video_format_t *fmt;
 
     /* Information
      *
@@ -246,46 +305,71 @@ struct vout_display_t {
      */
     vout_display_info_t info;
 
-    /* Return a pointer over the current picture_pool_t* (mandatory).
+    /**
+     * Prepares a picture and an optional subpicture for display (optional).
      *
-     * For performance reasons, it is best to provide at least count
-     * pictures but it is not mandatory.
-     * You can return NULL when you cannot/do not want to allocate
-     * pictures.
-     * The vout display module keeps the ownership of the pool and can
-     * destroy it only when closing or on invalid pictures control.
+     * This callback is called once a picture buffer content is ready,
+     * as far in advance as possible to the intended display time,
+     * but only after the previous picture was displayed.
+     *
+     * The callback should perform any preprocessing operation that will not
+     * actually cause the picture to be shown, such as blending the subpicture
+     * or upload the picture to video memory. If supported, this can also
+     * queue the picture to be shown asynchronously at the given date.
+     *
+     * If prepare is not \c NULL, there is an implicit guarantee that display
+     * will be invoked with the exact same picture afterwards:
+     * prepare 1st picture, display 1st picture, prepare 2nd picture, display
+     * 2nd picture, and so on.
+     *
+     * \note The picture buffers may have multiple references.
+     * Therefore the pixel content of the picture or of the subpicture
+     * must not be changed.
+     *
+     * \param pic picture
+     * \param subpic subpicture to render over the picture
+     * \param date time when the picture is intended to be shown
      */
-    picture_pool_t *(*pool)(vout_display_t *, unsigned count);
+    void       (*prepare)(vout_display_t *, picture_t *pic,
+                          subpicture_t *subpic, vlc_tick_t date);
 
-    /* Prepare a picture and an optional subpicture for display (optional).
+    /**
+     * Displays a picture.
      *
-     * It is called before the next pf_display call to provide as much
-     * time as possible to prepare the given picture and the subpicture
-     * for display.
-     * You are guaranted that pf_display will always be called and using
-     * the exact same picture_t and subpicture_t.
-     * You cannot change the pixel content of the picture_t or of the
-     * subpicture_t.
+     * This callback is invoked at the time when the picture should be shown.
+     * The picture must be displayed as soon as possible.
+     *
+     * \note The picture buffers may have multiple references.
+     * Therefore the pixel content of the picture or of the subpicture
+     * must not be changed.
      */
-    void       (*prepare)(vout_display_t *, picture_t *, subpicture_t *,
-                          vlc_tick_t date);
+    void       (*display)(vout_display_t *, picture_t *pic);
 
-    /* Display a picture and an optional subpicture (mandatory).
+    /**
+     * Performs a control request (mandatory).
      *
-     * The picture and the optional subpicture must be displayed as soon as
-     * possible.
-     * You cannot change the pixel content of the picture_t or of the
-     * subpicture_t.
+     * \param query request type
      *
-     * This function gives away the ownership of the picture and of the
-     * subpicture, so you must release them as soon as possible.
+     * See \ref vout_display_query for the list of request types.
      */
-    void       (*display)(vout_display_t *, picture_t *, subpicture_t *);
+    int        (*control)(vout_display_t *, int query, va_list);
 
-    /* Control on the module (mandatory) */
-    int        (*control)(vout_display_t *, int, va_list);
+    /**
+     * Notifies a change of VR/360° viewpoint.
+     *
+     * May be NULL.
+     *
+     * \param vp viewpoint to use on the next render
+     */
+    int (*set_viewpoint)(vout_display_t *, const vlc_viewpoint_t *vp);
 
-    /* Private place holder for the vout_display_t module (optional)
+    /**
+     * Destroys the display.
+     */
+    void (*close)(vout_display_t *);
+
+    /**
+     * Private data for the display module.
      *
      * A module is free to use it as it wishes.
      */
@@ -298,86 +382,93 @@ struct vout_display_t {
     vout_display_owner_t owner;
 };
 
-static inline void vout_display_SendEvent(vout_display_t *vd, int query, ...)
+/**
+ * Creates video output display.
+ */
+VLC_API
+vout_display_t *vout_display_New(vlc_object_t *,
+    const video_format_t *, vlc_video_context *,
+    const vout_display_cfg_t *, const char *module,
+    const vout_display_owner_t *);
+
+/**
+ * Destroys a video output display.
+ */
+VLC_API void vout_display_Delete(vout_display_t *);
+
+/**
+ * Prepares a picture for display.
+ *
+ * This renders a picture for subsequent display, with vout_display_Display().
+ *
+ * \note A reference to the input picture is consumed by the function, which
+ * returns a reference to an output picture for display. The input and output
+ * picture may or may not be equal depending on the underlying display setup.
+ *
+ * \bug Currently, only one picture can be prepared at a time. It must be
+ * displayed with vout_display_Display() before any picture is prepared or
+ * before the display is destroyd with vout_display_Delete().
+ *
+ \ bug Rendering subpictures is not supported with this function yet.
+ * \c subpic must be @c NULL .
+ *
+ * \param vd display to prepare the picture for
+ * \param picture picure to be prepared
+ * \param subpic reserved, must be NULL
+ * \param date intended time to show the picture
+ * \return The prepared picture is returned, NULL on error.
+ */
+VLC_API picture_t *vout_display_Prepare(vout_display_t *vd, picture_t *picture,
+                                        subpicture_t *subpic, vlc_tick_t date);
+
+/**
+ * Displays a picture.
+ */
+static inline void vout_display_Display(vout_display_t *vd, picture_t *picture)
 {
-    va_list args;
-    va_start(args, query);
-    vd->owner.event(vd, query, args);
-    va_end(args);
+    if (vd->display != NULL)
+        vd->display(vd, picture);
+    picture_Release(picture);
 }
 
-VLC_DEPRECATED /* Use vout_window_ReportSize() in window provider instead. */
-static inline void vout_display_SendEventDisplaySize(vout_display_t *vd,
-                                                     int width, int height)
-{
-    vout_window_ReportSize(vd->cfg->window, width, height);
-}
+VLC_API
+void vout_display_SetSize(vout_display_t *vd, unsigned width, unsigned height);
 
-static inline void vout_display_SendEventPicturesInvalid(vout_display_t *vd)
-{
-    vout_display_SendEvent(vd, VOUT_DISPLAY_EVENT_PICTURES_INVALID);
-}
-
-VLC_DEPRECATED /* Use vout_window_ReportClose() in window provider instead. */
-static inline void vout_display_SendEventClose(vout_display_t *vd)
-{
-    vout_window_ReportClose(vd->cfg->window);
-}
-
-#if defined(_WIN32) || defined(__OS2__)
-VLC_DEPRECATED
-/* Use vout_window_ReportKeyPress() in window provider instead. */
-static inline void vout_display_SendEventKey(vout_display_t *vd, int key)
-{
-    vout_window_ReportKeyPress(vd->cfg->window, key);
-}
-
-static inline void vout_display_SendEventFullscreen(vout_display_t *vd, bool is_fullscreen)
-{
-    vout_display_SendEvent(vd, VOUT_DISPLAY_EVENT_FULLSCREEN, is_fullscreen);
-}
-
-VLC_DEPRECATED /* Core needs not know about this. Don't call. */
-static inline void vout_display_SendWindowState(vout_display_t *vd, unsigned state)
-{
-    vout_display_SendEvent(vd, VOUT_DISPLAY_EVENT_WINDOW_STATE, state);
-}
-#endif
-static inline void vout_display_SendEventMouseMoved(vout_display_t *vd, int x, int y)
-{
-    vout_display_SendEvent(vd, VOUT_DISPLAY_EVENT_MOUSE_MOVED, x, y);
-}
 static inline void vout_display_SendEventMousePressed(vout_display_t *vd, int button)
 {
-    vout_display_SendEvent(vd, VOUT_DISPLAY_EVENT_MOUSE_PRESSED, button);
+    vout_window_ReportMousePressed(vd->cfg->window, button);
 }
 static inline void vout_display_SendEventMouseReleased(vout_display_t *vd, int button)
 {
-    vout_display_SendEvent(vd, VOUT_DISPLAY_EVENT_MOUSE_RELEASED, button);
+    vout_window_ReportMouseReleased(vd->cfg->window, button);
 }
 static inline void vout_display_SendEventMouseDoubleClick(vout_display_t *vd)
 {
-    vout_display_SendEvent(vd, VOUT_DISPLAY_EVENT_MOUSE_DOUBLE_CLICK);
+    vout_window_ReportMouseDoubleClick(vd->cfg->window, MOUSE_BUTTON_LEFT);
 }
 static inline void vout_display_SendEventViewpointMoved(vout_display_t *vd,
                                                         const vlc_viewpoint_t *vp)
 {
-    vout_display_SendEvent(vd, VOUT_DISPLAY_EVENT_VIEWPOINT_MOVED, vp);
+    if (vd->owner.viewpoint_moved)
+        vd->owner.viewpoint_moved(vd->owner.sys, vp);
 }
 
 /**
- * Asks for a new window of a given type.
+ * Helper function that applies the necessary transforms to the mouse position
+ * and then calls vout_display_SendEventMouseMoved.
+ *
+ * \param vd vout_display_t.
+ * \param m_x Mouse x position (relative to place, origin is top left).
+ * \param m_y Mouse y position (relative to place, origin is top left).
  */
-static inline vout_window_t *vout_display_NewWindow(vout_display_t *vd, unsigned type)
+static inline void vout_display_SendMouseMovedDisplayCoordinates(vout_display_t *vd, int m_x, int m_y)
 {
-    vout_window_t *wnd = vd->cfg->window;
-
-    return (type == wnd->type) ? wnd : NULL;
+    vout_window_ReportMouseMoved(vd->cfg->window, m_x, m_y);
 }
 
-static inline bool vout_display_IsWindowed(vout_display_t *vd)
+static inline bool vout_display_cfg_IsWindowed(const vout_display_cfg_t *cfg)
 {
-    return vd->cfg->window->type != VOUT_WINDOW_TYPE_DUMMY;
+    return cfg->window->type != VOUT_WINDOW_TYPE_DUMMY;
 }
 
 /**
@@ -390,40 +481,51 @@ VLC_API void vout_display_GetDefaultDisplaySize(unsigned *width, unsigned *heigh
 
 
 /**
- * Structure used to store the result of a vout_display_PlacePicture.
+ * Video placement.
+ *
+ * This structure stores the result of a vout_display_PlacePicture() call.
  */
 typedef struct {
-    int x;
-    int y;
-    unsigned width;
-    unsigned height;
+    int x; /*< Relative pixel offset from the display left edge */
+    int y; /*< Relative pixel offset from the display top edge */
+    unsigned width; /*< Picture pixel width */
+    unsigned height; /*< Picture pixel height */
 } vout_display_place_t;
 
 /**
- * Computes how to place a picture inside the display to respect
- * the given parameters.
- * This assumes that cropping is done by an external mean.
- *
- * \param p_place Place inside the window (window pixel unit)
- * \param p_source Video source format
- * \param p_cfg Display configuration
- * \param b_clip If true, prevent the video to go outside the display (break zoom).
+ * Compares two \ref vout_display_place_t.
  */
-VLC_API void vout_display_PlacePicture(vout_display_place_t *place, const video_format_t *source, const vout_display_cfg_t *cfg, bool do_clipping);
-
+static inline bool vout_display_PlaceEquals(const vout_display_place_t *p1,
+                                            const vout_display_place_t *p2)
+{
+    return p1->x == p2->x && p1->width == p2->width &&
+            p1->y == p2->y && p1->height == p2->height;
+}
 
 /**
- * Helper function that applies the necessary transforms to the mouse position
- * and then calls vout_display_SendEventMouseMoved.
+ * Computes the intended picture placement inside the display.
  *
- * \param vd vout_display_t.
- * \param orient_display The orientation of the picture as seen on screen (probably ORIENT_NORMAL).
- * \param m_x Mouse x position (relative to place, origin is top left).
- * \param m_y Mouse y position (relative to place, origin is top left).
- * \param place Place of the picture.
+ * This function computes where to show a picture inside the display with
+ * respect to the provided parameters, and returns the result
+ * in a \ref vout_display_place_t structure.
+ *
+ * This assumes that cropping is done by an external mean.
+ *
+ * \param place Storage space for the picture placement [OUT]
+ * \param source Video source format
+ * \param cfg Display configuration
  */
-VLC_API void vout_display_SendMouseMovedDisplayCoordinates(vout_display_t *vd, video_orientation_t orient_display, int m_x, int m_y,
-                                                           vout_display_place_t *place);
+VLC_API void vout_display_PlacePicture(vout_display_place_t *place, const video_format_t *source, const vout_display_cfg_t *cfg);
+
+/**
+ * Translates mouse state.
+ *
+ * This translates the mouse (pointer) state from window coordinates to
+ * video coordinates.
+ * @note @c video and @c window pointers may alias.
+ */
+void vout_display_TranslateMouseState(vout_display_t *vd, vlc_mouse_t *video,
+                                      const vlc_mouse_t *window);
 
 /** @} */
 #endif /* VLC_VOUT_DISPLAY_H */

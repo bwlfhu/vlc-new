@@ -2,7 +2,6 @@
  * avcodec.c: video and audio decoder and encoder using libavcodec
  *****************************************************************************
  * Copyright (C) 1999-2008 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Gildas Bazin <gbazin@videolan.org>
@@ -119,7 +118,7 @@ vlc_module_begin ()
     add_obsolete_integer( "avcodec-vismv" ) /* removed since 3.0.0 */
     add_obsolete_integer ( "ffmpeg-lowres" ) /* removed since 2.1.0 */
     add_obsolete_bool( "ffmpeg-fast" ) /* removed since 2.1.0 */
-    add_bool( "avcodec-fast", false, FAST_TEXT, FAST_LONGTEXT, false )
+    add_obsolete_bool( "avcodec-fast" ) /* removed since 4.0.0 */
     add_obsolete_integer ( "ffmpeg-skiploopfilter" ) /* removed since 2.1.0 */
     add_integer ( "avcodec-skiploopfilter", 0, SKIPLOOPF_TEXT,
                   SKIPLOOPF_LONGTEXT, false)
@@ -132,7 +131,7 @@ vlc_module_begin ()
     add_obsolete_string( "ffmpeg-codec" ) /* removed since 2.1.0 */
     add_string( "avcodec-codec", NULL, CODEC_TEXT, CODEC_LONGTEXT, true )
     add_obsolete_bool( "ffmpeg-hw" ) /* removed since 2.1.0 */
-    add_module("avcodec-hw", "hw decoder", "any", HW_TEXT, HW_LONGTEXT)
+    add_obsolete_string( "avcodec-hw" ) /* removed since 4.0.0 */
 #if defined(FF_THREAD_FRAME)
     add_obsolete_integer( "ffmpeg-threads" ) /* removed since 2.1.0 */
     add_integer( "avcodec-threads", 0, THREADS_TEXT, THREADS_LONGTEXT, true );
@@ -256,7 +255,8 @@ AVCodecContext *ffmpeg_AllocContext( decoder_t *p_dec,
 
     /* *** determine codec type *** */
     if( !GetFfmpegCodec( p_dec->fmt_in.i_cat, p_dec->fmt_in.i_codec,
-                         &i_codec_id, &psz_namecodec ) )
+                         &i_codec_id, &psz_namecodec ) ||
+         i_codec_id == AV_CODEC_ID_RAWVIDEO )
          return NULL;
 
     msg_Dbg( p_dec, "using %s %s", AVPROVIDER(LIBAVCODEC), LIBAVCODEC_IDENT );

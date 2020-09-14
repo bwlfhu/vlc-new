@@ -2,7 +2,6 @@
  * avcodec.h: decoder and encoder using libavcodec
  *****************************************************************************
  * Copyright (C) 2001-2008 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *
@@ -85,10 +84,6 @@ int ffmpeg_OpenCodec( decoder_t *p_dec, AVCodecContext *, const AVCodec * );
     "when there is not enough time. It's useful with low CPU power " \
     "but it can produce distorted pictures.")
 
-#define FAST_TEXT N_("Allow speed tricks")
-#define FAST_LONGTEXT N_( \
-    "Allow non specification compliant speedup tricks. Faster but error-prone.")
-
 #define SKIP_FRAME_TEXT N_("Skip frame (default=0)")
 #define SKIP_FRAME_LONGTEXT N_( \
     "Force skipping of frames to speed up decoding " \
@@ -109,9 +104,6 @@ int ffmpeg_OpenCodec( decoder_t *p_dec, AVCodecContext *, const AVCodec * );
 #define SKIPLOOPF_LONGTEXT N_( "Skipping the loop filter (aka deblocking) " \
     "usually has a detrimental effect on quality. However it provides a big " \
     "speedup for high definition streams." )
-
-#define HW_TEXT N_("Hardware decoding")
-#define HW_LONGTEXT N_("This allows hardware decoding when available.")
 
 #define THREADS_TEXT N_( "Threads" )
 #define THREADS_LONGTEXT N_( "Number of threads used for decoding, 0 meaning auto" )

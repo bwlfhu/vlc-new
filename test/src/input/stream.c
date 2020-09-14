@@ -21,7 +21,8 @@
 #include "../../libvlc/test.h"
 #include "../lib/libvlc_internal.h"
 
-#include <vlc_md5.h>
+#include <vlc_strings.h>
+#include <vlc_hash.h>
 #include <vlc_stream.h>
 #include <vlc_rand.h>
 #include <vlc_fs.h>
@@ -199,7 +200,7 @@ stream_open( const char *psz_url )
     p_reader = calloc( 1, sizeof(struct reader) );
     assert( p_reader );
 
-    p_vlc = libvlc_new( sizeof(argv) / sizeof(argv[0]), argv );
+    p_vlc = libvlc_new( ARRAY_SIZE(argv), argv );
     assert( p_vlc != NULL );
 
     p_reader->u.s = vlc_stream_NewURL( p_vlc->p_libvlc_int, psz_url );
@@ -234,8 +235,8 @@ read_at( struct reader **pp_readers, unsigned int i_readers,
         const uint8_t *p_peek = NULL;
         struct reader *p_reader = pp_readers[i];
 
-        log( "%s: %s %zu @ %"PRIu64" (size: %" PRIu64 ")\n", p_reader->psz_name,
-              p_buf ? "read" : "peek", i_read, i_offset, i_size );
+        test_log( "%s: %s %zu @ %"PRIu64" (size: %" PRIu64 ")\n", p_reader->psz_name,
+                  p_buf ? "read" : "peek", i_read, i_offset, i_size );
         assert( p_reader->pf_seek( p_reader, i_offset ) != -1 );
 
         i_last_pos = p_reader->pf_tell( p_reader );
@@ -294,33 +295,30 @@ test( struct reader **pp_readers, unsigned int i_readers, const char *psz_md5 )
     ssize_t i_ret = 0;
     uint64_t i_offset = 0;
     uint64_t i_size;
-    char *psz_read_md5;
-    struct md5_s md5;
+    char psz_read_md5[VLC_HASH_MD5_DIGEST_HEX_SIZE];
+    vlc_hash_md5_t md5;
 
     /* Compare size between each readers */
     i_size = pp_readers[0]->pf_getsize( pp_readers[0] );
     assert( i_size > 0 );
 
-    log( "stream size: %"PRIu64"\n", i_size );
+    test_log( "stream size: %"PRIu64"\n", i_size );
     for( unsigned int i = 1; i < i_readers; ++i )
         assert( pp_readers[i]->pf_getsize( pp_readers[i] ) == i_size );
 
     /* Read the whole file and compare between each readers */
     if( psz_md5 != NULL )
-        InitMD5( &md5 );
+        vlc_hash_md5_Init( &md5 );
     while( ( i_ret = READ_AT( i_offset, 4096 ) ) > 0 )
     {
         i_offset += i_ret;
         if( psz_md5 != NULL )
-            AddMD5( &md5, p_buf, i_ret );
+            vlc_hash_md5_Update( &md5, p_buf, i_ret );
     }
     if( psz_md5 != NULL )
     {
-        EndMD5( &md5 );
-        psz_read_md5 = psz_md5_hash( &md5 );
-        assert( psz_read_md5 );
+        vlc_hash_FinishHex( &md5, psz_read_md5 );
         assert( strcmp( psz_read_md5, psz_md5 ) == 0 );
-        free( psz_read_md5 );
     }
 
     /* Test cache skip */
@@ -374,10 +372,10 @@ main( void )
     char *psz_url;
     int i_tmp_fd;
 
-    log( "Generating random file...\n" );
+    test_log( "Generating random file...\n" );
     i_tmp_fd = vlc_mkstemp( psz_tmp_path );
     fill_rand( i_tmp_fd, RAND_FILE_SIZE );
-    log( "Testing random file with libc, and stream...\n" );
+    test_log( "Testing random file with libc, and stream...\n" );
     assert( i_tmp_fd != -1 );
     assert( asprintf( &psz_url, "file://%s", psz_tmp_path ) != -1 );
 
@@ -392,11 +390,11 @@ main( void )
     close( i_tmp_fd );
 #else
 
-    log( "Testing http url with stream...\n" );
+    test_log( "Testing http url with stream...\n" );
     alarm( 0 );
     if( !( pp_readers[0] = stream_open( HTTP_URL ) ) )
     {
-        log( "WARNING: can't test http url" );
+        test_log( "WARNING: can't test http url" );
         return 0;
     }
 

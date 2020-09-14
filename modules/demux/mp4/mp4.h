@@ -73,6 +73,26 @@ typedef enum RTP_timstamp_synchronization_s
     UNKNOWN_SYNC = 0, UNSYNCHRONIZED = 1, SYNCHRONIZED = 2, RESERVED = 3
 } RTP_timstamp_synchronization_t;
 
+enum
+{
+    USEAS_NONE = 0,
+    USEAS_CHAPTERS = 1 << 0,
+    USEAS_TIMECODE = 1 << 1,
+};
+
+typedef struct
+{
+    uint32_t i_timescale_override;
+    uint32_t i_sample_size_override;
+    const MP4_Box_t *p_asf;
+    uint8_t     rgi_chans_reordering[AOUT_CHAN_MAX];
+    bool        b_chans_reorder;
+
+    bool b_forced_spu; /* forced track selection (never done by default/priority) */
+
+    uint32_t    i_block_flags;
+} track_config_t;
+
  /* Contain all needed information for read all track with vlc */
 typedef struct
 {
@@ -81,7 +101,8 @@ typedef struct
     int b_ok;               /* The track is usable */
     int b_enable;           /* is the trak enable by default */
     bool b_selected;  /* is the trak being played */
-    bool b_chapters_source;   /* True when used for chapter only */
+    int i_use_flags;  /* !=0 Set when track is referenced by specific reference types.
+                         You'll need to lookup other tracks tref to know the ref source */
     bool b_forced_spu; /* forced track selection (never done by default/priority) */
     uint32_t i_switch_group;
 
@@ -98,6 +119,7 @@ typedef struct
     int i_width;
     int i_height;
     float f_rotation;
+    int i_flip;
 
     /* more internal data */
     uint32_t        i_timescale;    /* time scale for this track only */
@@ -139,14 +161,6 @@ typedef struct
 
     stime_t i_time; // track scaled
 
-    /* rrtp reception hint track */
-    MP4_Box_t *p_sdp;                         /* parsed for codec and other info */
-    RTP_timstamp_synchronization_t sync_mode; /* whether track is already in sync */
-
-    /* First recorded RTP timestamp offset.
-     * Needed for rrtp synchronization */
-    int32_t         i_tsro_offset;
-
     struct
     {
         /* for moof parsing */
@@ -165,6 +179,7 @@ typedef struct
         uint64_t i_trun_sample;
         uint64_t i_trun_sample_pos;
 
+        int i_temp;
     } context;
 
     /* ASF packets handling */
@@ -174,11 +189,13 @@ typedef struct
     asf_track_info_t asfinfo;
 } mp4_track_t;
 
-int SetupVideoES( demux_t *p_demux, mp4_track_t *p_track, MP4_Box_t *p_sample );
-int SetupAudioES( demux_t *p_demux, mp4_track_t *p_track, MP4_Box_t *p_sample );
-int SetupSpuES( demux_t *p_demux, mp4_track_t *p_track, MP4_Box_t *p_sample );
-int SetupCCES( demux_t *p_demux, mp4_track_t *p_track, MP4_Box_t *p_sample );
-void SetupMeta( vlc_meta_t *p_meta, MP4_Box_t *p_udta );
+int SetupVideoES( demux_t *p_demux, const mp4_track_t *p_track,
+                  const MP4_Box_t *p_sample, es_format_t *, track_config_t *);
+int SetupAudioES( demux_t *p_demux, const mp4_track_t *p_track,
+                  const MP4_Box_t *p_sample, es_format_t *, track_config_t * );
+int SetupSpuES( demux_t *p_demux, const mp4_track_t *p_track,
+                const MP4_Box_t *p_sample, es_format_t *, track_config_t * );
+void SetupMeta( vlc_meta_t *p_meta, const MP4_Box_t *p_udta );
 
 /* format of RTP reception hint track sample constructor */
 typedef struct

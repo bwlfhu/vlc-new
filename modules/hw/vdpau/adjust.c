@@ -22,22 +22,22 @@
 # include "config.h"
 #endif
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <math.h>
 
 #include <vlc_common.h>
 #include <vlc_plugin.h>
 #include <vlc_filter.h>
-#include <vlc_atomic.h>
 #include <vlc_picture.h>
 #include "vlc_vdpau.h"
 
 typedef struct
 {
-    vlc_atomic_float brightness;
-    vlc_atomic_float contrast;
-    vlc_atomic_float saturation;
-    vlc_atomic_float hue;
+    _Atomic float brightness;
+    _Atomic float contrast;
+    _Atomic float saturation;
+    _Atomic float hue;
 } filter_sys_t;
 
 static float vlc_to_vdp_brightness(float brightness)
@@ -53,7 +53,10 @@ static float vlc_to_vdp_brightness(float brightness)
 static int BrightnessCallback(vlc_object_t *obj, const char *varname,
                               vlc_value_t prev, vlc_value_t cur, void *data)
 {
-    vlc_atomic_store_float(data, vlc_to_vdp_brightness(cur.f_float));
+    _Atomic float *atom = data;
+
+    atomic_store_explicit(atom, vlc_to_vdp_brightness(cur.f_float),
+                          memory_order_relaxed);
     (void) obj; (void) varname; (void) prev;
     return VLC_SUCCESS;
 }
@@ -70,7 +73,10 @@ static float vlc_to_vdp_contrast(float contrast)
 static int ContrastCallback(vlc_object_t *obj, const char *varname,
                             vlc_value_t prev, vlc_value_t cur, void *data)
 {
-    vlc_atomic_store_float(data, vlc_to_vdp_contrast(cur.f_float));
+    _Atomic float *atom = data;
+
+    atomic_store_explicit(atom, vlc_to_vdp_contrast(cur.f_float),
+                          memory_order_relaxed);
     (void) obj; (void) varname; (void) prev;
     return VLC_SUCCESS;
 }
@@ -80,7 +86,10 @@ static int ContrastCallback(vlc_object_t *obj, const char *varname,
 static int SaturationCallback(vlc_object_t *obj, const char *varname,
                               vlc_value_t prev, vlc_value_t cur, void *data)
 {
-    vlc_atomic_store_float(data, vlc_to_vdp_saturation(cur.f_float));
+    _Atomic float *atom = data;
+
+    atomic_store_explicit(atom, vlc_to_vdp_saturation(cur.f_float),
+                          memory_order_relaxed);
     (void) obj; (void) varname; (void) prev;
     return VLC_SUCCESS;
 }
@@ -99,24 +108,29 @@ static float vlc_to_vdp_hue(float hue)
 static int HueCallback(vlc_object_t *obj, const char *varname,
                               vlc_value_t prev, vlc_value_t cur, void *data)
 {
+    _Atomic float *atom = data;
 
-    vlc_atomic_store_float(data, vlc_to_vdp_hue(cur.f_float));
+    atomic_store_explicit(atom, vlc_to_vdp_hue(cur.f_float),
+                          memory_order_relaxed);
     (void) obj; (void) varname; (void) prev;
     return VLC_SUCCESS;
 }
 
 static picture_t *Adjust(filter_t *filter, picture_t *pic)
 {
-    filter_sys_t *sys = filter->p_sys;
-    vlc_vdp_video_field_t *f = (vlc_vdp_video_field_t *)pic->context;
+    const filter_sys_t *sys = filter->p_sys;
+    vlc_vdp_video_field_t *f = VDPAU_FIELD_FROM_PICCTX(pic->context);
 
     if (unlikely(f == NULL))
         return pic;
 
-    f->procamp.brightness = vlc_atomic_load_float(&sys->brightness);
-    f->procamp.contrast = vlc_atomic_load_float(&sys->contrast);
-    f->procamp.saturation = vlc_atomic_load_float(&sys->saturation);
-    f->procamp.hue = vlc_atomic_load_float(&sys->hue);
+    f->procamp.brightness = atomic_load_explicit(&sys->brightness,
+                                                 memory_order_relaxed);
+    f->procamp.contrast = atomic_load_explicit(&sys->contrast,
+                                               memory_order_relaxed);
+    f->procamp.saturation = atomic_load_explicit(&sys->saturation,
+                                                 memory_order_relaxed);
+    f->procamp.hue = atomic_load_explicit(&sys->hue, memory_order_relaxed);
 
     return pic;
 }
@@ -129,6 +143,9 @@ static int Open(vlc_object_t *obj)
 {
     filter_t *filter = (filter_t *)obj;
 
+    if ( filter->vctx_in == NULL ||
+         vlc_video_context_GetType(filter->vctx_in) != VLC_VIDEO_CONTEXT_VDPAU )
+        return VLC_EGENERIC;
     if (filter->fmt_in.video.i_chroma != VLC_CODEC_VDPAU_VIDEO_420
      && filter->fmt_in.video.i_chroma != VLC_CODEC_VDPAU_VIDEO_422
      && filter->fmt_in.video.i_chroma != VLC_CODEC_VDPAU_VIDEO_444)
@@ -151,20 +168,20 @@ static int Open(vlc_object_t *obj)
     f = var_CreateGetFloatCommand(filter, "brightness");
     var_AddCallback(filter, "brightness", BrightnessCallback,
                     &sys->brightness);
-    vlc_atomic_init_float(&sys->brightness, vlc_to_vdp_brightness(f));
+    atomic_init(&sys->brightness, vlc_to_vdp_brightness(f));
 
     f = var_CreateGetFloatCommand(filter, "contrast");
     var_AddCallback(filter, "contrast", ContrastCallback, &sys->contrast);
-    vlc_atomic_init_float(&sys->contrast, vlc_to_vdp_contrast(f));
+    atomic_init(&sys->contrast, vlc_to_vdp_contrast(f));
 
     f = var_CreateGetFloatCommand(filter, "saturation");
     var_AddCallback(filter, "saturation", SaturationCallback,
                     &sys->saturation);
-    vlc_atomic_init_float(&sys->saturation, vlc_to_vdp_saturation(f));
+    atomic_init(&sys->saturation, vlc_to_vdp_saturation(f));
 
     i = var_CreateGetFloatCommand(filter, "hue");
     var_AddCallback(filter, "hue", HueCallback, &sys->hue);
-    vlc_atomic_init_float(&sys->hue, vlc_to_vdp_hue(i));
+    atomic_init(&sys->hue, vlc_to_vdp_hue(i));
 
     return VLC_SUCCESS;
 }

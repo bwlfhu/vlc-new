@@ -66,6 +66,9 @@ range		\?{1,6}|{h}(\?{0,5}|{h}(\?{0,4}|{h}(\?{0,3}|{h}(\?{0,2}|{h}(\??|{h})))))
 "-->"			{return CDC;}
 "~="			{return INCLUDES;}
 "|="			{return DASHMATCH;}
+"^="			{return BEGINSWITH;}
+"$="			{return ENDSWITH;}
+"*="			{return CONTAINS;}
 
 {string}		{ yylval->string = vlc_css_unquotedunescaped(yytext); return STRING;}
 
@@ -104,4 +107,3 @@ U\+{range}		{ yylval->string = strdup(yytext); return UNICODERANGE;}
 U\+{h}{1,6}-{h}{1,6}	{ yylval->string = strdup(yytext); return UNICODERANGE;}
 
 .			{return *yytext;}
-

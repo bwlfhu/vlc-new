@@ -88,7 +88,6 @@ struct filter_spatialaudio
     filter_spatialaudio()
         : speakers(NULL)
         , i_inputPTS(0)
-        , i_last_input_pts(0)
         , inBuf(NULL)
         , outBuf(NULL)
     {}
@@ -123,7 +122,6 @@ struct filter_spatialaudio
 
     std::vector<float> inputSamples;
     vlc_tick_t i_inputPTS;
-    vlc_tick_t i_last_input_pts;
     unsigned i_order;
     unsigned i_nondiegetic;
     unsigned i_lr_channels; // number of physical left/right channel pairs
@@ -168,13 +166,6 @@ static block_t *Mix( filter_t *p_filter, block_t *p_buf )
 {
     filter_spatialaudio *p_sys = reinterpret_cast<filter_spatialaudio *>(p_filter->p_sys);
 
-    /* Detect discontinuity due to a pause */
-    static const vlc_tick_t rounding_error = 10;
-    if( p_sys->i_inputPTS != 0
-     && p_buf->i_pts - p_sys->i_last_input_pts > rounding_error )
-        Flush( p_filter );
-    p_sys->i_last_input_pts = p_buf->i_pts + p_buf->i_length;
-
     const size_t i_prevSize = p_sys->inputSamples.size();
     p_sys->inputSamples.resize(i_prevSize + p_buf->i_nb_samples * p_sys->i_inputNb);
     memcpy((char*)(p_sys->inputSamples.data() + i_prevSize), (char*)p_buf->p_buffer, p_buf->i_buffer);
@@ -196,7 +187,7 @@ static block_t *Mix( filter_t *p_filter, block_t *p_buf )
     else
         p_out_buf->i_pts = p_sys->i_inputPTS;
     p_out_buf->i_dts = p_out_buf->i_pts;
-    p_out_buf->i_length = p_out_buf->i_nb_samples * CLOCK_FREQ / p_filter->fmt_in.audio.i_rate;
+    p_out_buf->i_length = vlc_tick_from_samples(p_out_buf->i_nb_samples, p_filter->fmt_in.audio.i_rate);
 
     float *p_dest = (float *)p_out_buf->p_buffer;
     const float *p_src = (float *)p_sys->inputSamples.data();
@@ -281,7 +272,7 @@ static void Flush( filter_t *p_filter )
 {
     filter_spatialaudio *p_sys = reinterpret_cast<filter_spatialaudio *>(p_filter->p_sys);
     p_sys->inputSamples.clear();
-    p_sys->i_last_input_pts = p_sys->i_inputPTS = 0;
+    p_sys->i_inputPTS = 0;
 }
 
 static void ChangeViewpoint( filter_t *p_filter, const vlc_viewpoint_t *p_vp)

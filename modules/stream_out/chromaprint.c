@@ -28,7 +28,6 @@
 
 #include <vlc_common.h>
 #include <vlc_plugin.h>
-#include <vlc_input.h>
 #include <vlc_block.h>
 #include <vlc_sout.h>
 
@@ -59,7 +58,7 @@ static int   Send( sout_stream_t *, void *, block_t * );
 
 vlc_module_begin ()
     set_description( N_("Chromaprint stream output") )
-    set_capability( "sout stream", 0 )
+    set_capability( "sout output", 0 )
     add_shortcut( "chromaprint" )
     add_integer( "duration", 90, DURATION_TEXT, DURATION_LONGTEXT, true )
     set_callbacks( Open, Close )

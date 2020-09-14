@@ -71,27 +71,32 @@ void transcode_encoder_update_format_out( transcode_encoder_t *, const es_format
 block_t * transcode_encoder_encode( transcode_encoder_t *, void * );
 block_t * transcode_encoder_get_output_async( transcode_encoder_t * );
 void transcode_encoder_delete( transcode_encoder_t * );
-transcode_encoder_t * transcode_encoder_new( vlc_object_t *, const es_format_t * );
+transcode_encoder_t * transcode_encoder_new( encoder_t *, const es_format_t * );
 void transcode_encoder_close( transcode_encoder_t * );
 
 bool transcode_encoder_opened( const transcode_encoder_t * );
 int transcode_encoder_open( transcode_encoder_t *, const transcode_encoder_config_t * );
+int transcode_encoder_drain( transcode_encoder_t *, block_t ** );
 
-int transcode_encoder_test( vlc_object_t *p_obj,
+int transcode_encoder_test( encoder_t *p_encoder,
                             const transcode_encoder_config_t *p_cfg,
                             const es_format_t *p_dec_fmtin,
                             vlc_fourcc_t i_codec_in,
                             es_format_t *p_enc_wanted_in );
 
 void transcode_encoder_video_configure( vlc_object_t *p_obj,
-                                        const video_format_t *p_dec_in,
                                         const video_format_t *p_dec_out,
                                         const transcode_encoder_config_t *p_cfg,
                                         const video_format_t *p_src,
+                                        vlc_video_context *vctx_in,
                                         transcode_encoder_t *p_enc );
 
-int transcode_encoder_audio_configure( vlc_object_t *p_obj,
-                                       const transcode_encoder_config_t *p_cfg,
+void transcode_video_framerate_apply( const video_format_t *p_src,
+                                            video_format_t *p_dst );
+void transcode_video_sar_apply( const video_format_t *p_src,
+                                      video_format_t *p_dst );
+
+int transcode_encoder_audio_configure( const transcode_encoder_config_t *p_cfg,
                                        const audio_format_t *p_dec_out,
-                                       transcode_encoder_t *p_enc );
+                                       transcode_encoder_t *p_enc, bool );
 

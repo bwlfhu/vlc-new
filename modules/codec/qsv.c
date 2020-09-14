@@ -2,7 +2,6 @@
  * qsv.c: mpeg4-part10/mpeg2 video encoder using Intel Media SDK
  *****************************************************************************
  * Copyright (C) 2013 VideoLabs
- * $Id$
  *
  * Authors: Julien 'Lta' BALLET <contact@lta.io>
  *
@@ -34,9 +33,10 @@
 #include <vlc_codec.h>
 #include <vlc_picture_pool.h>
 
-#include <vlc_fifo_helper.h>
+#include "vlc_fifo_helper.h"
 
 #include <mfx/mfxvideo.h>
+#include "../demux/mpeg/timestamps.h"
 
 #define SOUT_CFG_PREFIX     "sout-qsv-"
 
@@ -48,9 +48,6 @@
 #define QSV_BUSYWAIT_TIME   VLC_HARD_MIN_SLEEP
 /* The SDK doesn't have a default bitrate, so here's one. */
 #define QSV_BITRATE_DEFAULT (842)
-
-/* Makes x a multiple of 'align'. 'align' must be a power of 2 */
-#define QSV_ALIGN(align, x)     (((x)+(align)-1)&~((align)-1))
 
 /*****************************************************************************
  * Modules descriptor
@@ -302,16 +299,6 @@ typedef struct
 static block_t *Encode(encoder_t *, picture_t *);
 
 
-static inline vlc_tick_t qsv_timestamp_to_mtime(int64_t mfx_ts)
-{
-    return mfx_ts / INT64_C(9) * INT64_C(100);
-}
-
-static inline uint64_t qsv_mtime_to_timestamp(vlc_tick_t vlc_ts)
-{
-    return vlc_ts / UINT64_C(100) * UINT64_C(9);
-}
-
 static void clear_unused_frames(encoder_sys_t *sys)
 {
     QSVFrame *cur = sys->work_frames;
@@ -469,8 +456,8 @@ static int Open(vlc_object_t *this)
     sys->params.mfx.FrameInfo.FrameRateExtD = enc->fmt_in.video.i_frame_rate_base;
     sys->params.mfx.FrameInfo.FourCC        = MFX_FOURCC_NV12;
     sys->params.mfx.FrameInfo.ChromaFormat  = MFX_CHROMAFORMAT_YUV420;
-    sys->params.mfx.FrameInfo.Width         = QSV_ALIGN(16, enc->fmt_in.video.i_width);
-    sys->params.mfx.FrameInfo.Height        = QSV_ALIGN(32, enc->fmt_in.video.i_height);
+    sys->params.mfx.FrameInfo.Width         = vlc_align(enc->fmt_in.video.i_width, 16);
+    sys->params.mfx.FrameInfo.Height        = vlc_align(enc->fmt_in.video.i_height, 32);
     sys->params.mfx.FrameInfo.CropW         = enc->fmt_in.video.i_visible_width;
     sys->params.mfx.FrameInfo.CropH         = enc->fmt_in.video.i_visible_height;
     sys->params.mfx.FrameInfo.PicStruct     = MFX_PICSTRUCT_PROGRESSIVE;
@@ -480,7 +467,8 @@ static int Open(vlc_object_t *this)
     sys->params.mfx.FrameInfo.BitDepthLuma   = 8; /* for VLC_CODEC_NV12 */
 
     /* Parsing options common to all RC methods and codecs */
-    sys->params.IOPattern       = MFX_IOPATTERN_IN_SYSTEM_MEMORY;
+    sys->params.IOPattern = MFX_IOPATTERN_OUT_SYSTEM_MEMORY;
+    sys->params.IOPattern |= MFX_IOPATTERN_IN_SYSTEM_MEMORY;
     sys->params.AsyncDepth      = var_InheritInteger(enc, SOUT_CFG_PREFIX "async-depth");
     sys->params.mfx.GopOptFlag  = 1; /* TODO */
     sys->params.mfx.GopPicSize  = var_InheritInteger(enc, SOUT_CFG_PREFIX "gop-size");
@@ -568,17 +556,6 @@ static int Open(vlc_object_t *this)
         goto error;
     }
 
-    enc->fmt_in.video.i_chroma = VLC_CODEC_NV12;
-    video_format_t pool_fmt = enc->fmt_in.video;
-    pool_fmt.i_width  = sys->params.mfx.FrameInfo.Width;
-    pool_fmt.i_height = sys->params.mfx.FrameInfo.Height;
-    sys->input_pool = picture_pool_NewFromFormat( &pool_fmt, 18 );
-    if (sys->input_pool == NULL)
-    {
-        msg_Err(enc, "Failed to create the internal pool");
-        goto error;
-    }
-
     sys->params.ExtParam    = (mfxExtBuffer**)&init_params;
     sys->params.NumExtParam =
 #if QSV_HAVE_CO2
@@ -632,9 +609,18 @@ static int Open(vlc_object_t *this)
 
     /* Vlc module configuration */
     enc->fmt_in.i_codec                = VLC_CODEC_NV12; // Intel Media SDK requirement
+    enc->fmt_in.video.i_chroma         = VLC_CODEC_NV12;
     enc->fmt_in.video.i_bits_per_pixel = 12;
+    // require aligned pictures on input, a filter may be added before the encoder
     enc->fmt_in.video.i_width          = sys->params.mfx.FrameInfo.Width;
     enc->fmt_in.video.i_height         = sys->params.mfx.FrameInfo.Height;
+
+    sys->input_pool = picture_pool_NewFromFormat( &enc->fmt_in.video, 18 );
+    if (sys->input_pool == NULL)
+    {
+        msg_Err(enc, "Failed to create the internal pool");
+        goto nomem;
+    }
 
     enc->pf_encode_video = Encode;
 
@@ -685,8 +671,8 @@ static void qsv_set_block_flags(block_t *block, uint16_t frame_type)
  */
 static void qsv_set_block_ts(encoder_t *enc, encoder_sys_t *sys, block_t *block, mfxBitstream *bs)
 {
-    block->i_pts = qsv_timestamp_to_mtime(bs->TimeStamp) + sys->offset_pts;
-    block->i_dts = qsv_timestamp_to_mtime(bs->DecodeTimeStamp) + sys->offset_pts;
+    block->i_pts = FROM_SCALE_NZ(bs->TimeStamp) + sys->offset_pts;
+    block->i_dts = FROM_SCALE_NZ(bs->DecodeTimeStamp) + sys->offset_pts;
 
     /* HW encoder (with old driver versions) and some parameters
        combinations doesn't set the DecodeTimeStamp field so we warn
@@ -729,9 +715,8 @@ static block_t *qsv_synchronize_block(encoder_t *enc, async_task_t *task)
     /*         task->bs.FrameType, task->bs.TimeStamp, block->i_pts, task->bs.DecodeTimeStamp, *task->syncp); */
 
     /* Copied from x264.c: This isn't really valid for streams with B-frames */
-    block->i_length = CLOCK_FREQ *
-        enc->fmt_in.video.i_frame_rate_base /
-        enc->fmt_in.video.i_frame_rate;
+    block->i_length = vlc_tick_from_samples( enc->fmt_in.video.i_frame_rate_base,
+                                             enc->fmt_in.video.i_frame_rate );
 
     // Buggy DTS (value comes from experiments)
     if (task->bs.DecodeTimeStamp < -10000)
@@ -773,13 +758,13 @@ static int submit_frame(encoder_t *enc, picture_t *pic, QSVFrame **new_frame)
     else
         qf->surface.Info.PicStruct = MFX_PICSTRUCT_FIELD_BFF;
 
-    //qf->surface.Data.Pitch = QSV_ALIGN(16, qf->surface.Info.Width);
+    //qf->surface.Data.Pitch = vlc_align(qf->surface.Info.Width, 16);
 
     qf->surface.Data.PitchLow  = qf->pic->p[0].i_pitch;
     qf->surface.Data.Y         = qf->pic->p[0].p_pixels;
     qf->surface.Data.UV        = qf->pic->p[1].p_pixels;
 
-    qf->surface.Data.TimeStamp = qsv_mtime_to_timestamp(pic->date - sys->offset_pts);
+    qf->surface.Data.TimeStamp = TO_SCALE_NZ(pic->date - sys->offset_pts);
 
     *new_frame = qf;
 
@@ -885,7 +870,7 @@ static block_t *Encode(encoder_t *this, picture_t *pic)
          (!pic && async_task_t_fifo_GetCount(&sys->packets)))
     {
         assert(async_task_t_fifo_Show(&sys->packets)->syncp != 0);
-        async_task_t *task = async_task_t_fifo_Get(&sys->packets);
+        task = async_task_t_fifo_Get(&sys->packets);
         block = qsv_synchronize_block( enc, task );
         free(task->syncp);
         free(task);

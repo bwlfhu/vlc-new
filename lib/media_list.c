@@ -2,7 +2,6 @@
  * media_list.c: libvlc new API media list functions
  *****************************************************************************
  * Copyright (C) 2007 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Pierre d'Herbemont <pdherbemont # videolan.org>
  *
@@ -28,12 +27,12 @@
 #include <assert.h>
 
 #include <vlc/libvlc.h>
+#include <vlc/libvlc_picture.h>
 #include <vlc/libvlc_media.h>
 #include <vlc/libvlc_media_list.h>
 #include <vlc/libvlc_events.h>
 
 #include <vlc_common.h>
-#include <vlc_input.h>
 
 #include "libvlc_internal.h"
 #include "media_internal.h" // libvlc_media_new_from_input_item()
@@ -147,8 +146,7 @@ bool mlist_is_writable( libvlc_media_list_t *p_mlist )
  *
  * Init an object.
  **************************************************************************/
-libvlc_media_list_t *
-libvlc_media_list_new( libvlc_instance_t * p_inst )
+libvlc_media_list_t *libvlc_media_list_new(void)
 {
     libvlc_media_list_t * p_mlist;
 
@@ -159,7 +157,6 @@ libvlc_media_list_new( libvlc_instance_t * p_inst )
         return NULL;
     }
 
-    p_mlist->p_libvlc_instance = p_inst;
     libvlc_event_manager_init( &p_mlist->event_manager, p_mlist );
     p_mlist->b_read_only = false;
 
@@ -172,7 +169,6 @@ libvlc_media_list_new( libvlc_instance_t * p_inst )
     p_mlist->p_md = NULL;
     p_mlist->p_internal_md = NULL;
 
-    libvlc_retain( p_inst );
     return p_mlist;
 }
 
@@ -203,11 +199,8 @@ void libvlc_media_list_release( libvlc_media_list_t * p_mlist )
         libvlc_media_release( p_md );
     }
 
-    vlc_mutex_destroy( &p_mlist->object_lock );
-    vlc_mutex_destroy( &p_mlist->refcount_lock );
     vlc_array_clear( &p_mlist->items );
 
-    libvlc_release( p_mlist->p_libvlc_instance );
     free( p_mlist );
 }
 
@@ -221,44 +214,6 @@ void libvlc_media_list_retain( libvlc_media_list_t * p_mlist )
     vlc_mutex_lock( &p_mlist->refcount_lock );
     p_mlist->i_refcount++;
     vlc_mutex_unlock( &p_mlist->refcount_lock );
-}
-
-
-/**************************************************************************
- *       add_file_content (Public)
- **************************************************************************/
-int
-libvlc_media_list_add_file_content( libvlc_media_list_t * p_mlist,
-                                    const char * psz_uri )
-{
-    input_item_t * p_input_item;
-    libvlc_media_t * p_md;
-
-    p_input_item = input_item_New( psz_uri, _("Media Library") );
-
-    if( !p_input_item )
-    {
-        libvlc_printerr( "Not enough memory" );
-        return -1;
-    }
-
-    p_md = libvlc_media_new_from_input_item( p_mlist->p_libvlc_instance,
-                                             p_input_item );
-    if( !p_md )
-    {
-        input_item_Release( p_input_item );
-        return -1;
-    }
-
-    if( libvlc_media_list_add_media( p_mlist, p_md ) )
-    {
-#warning Missing error handling!
-        /* printerr and leaks */
-        return -1;
-    }
-
-    input_Read( p_mlist->p_libvlc_instance->p_libvlc_int, p_input_item );
-    return 0;
 }
 
 /**************************************************************************
@@ -445,7 +400,7 @@ int libvlc_media_list_index_of_item( libvlc_media_list_t * p_mlist,
  *
  * This indicates if this media list is read-only from a user point of view
  **************************************************************************/
-int libvlc_media_list_is_readonly( libvlc_media_list_t * p_mlist )
+bool libvlc_media_list_is_readonly( libvlc_media_list_t * p_mlist )
 {
     return p_mlist->b_read_only;
 }

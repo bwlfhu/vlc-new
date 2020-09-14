@@ -16,6 +16,7 @@ typedef struct
             char            *psz_deinterlace;
             config_chain_t  *p_deinterlace_cfg;
             char            *psz_spu_sources;
+            bool             b_reorient;
         } video;
     };
 } sout_filters_config_t;
@@ -42,8 +43,6 @@ typedef struct sout_stream_id_sys_t sout_stream_id_sys_t;
 
 typedef struct
 {
-    sout_stream_id_sys_t *id_video;
-
     bool                  b_soverlay;
 
     /* Audio */
@@ -57,9 +56,13 @@ typedef struct
     /* SPU */
     transcode_encoder_config_t senc_cfg;
 
+    /* Shared betweeen streams */
+    vlc_mutex_t     lock;
     /* Sync */
     bool            b_master_sync;
     sout_stream_id_sys_t *id_master_sync;
+    /* Spu's video */
+    sout_stream_id_sys_t *id_video;
 
 } sout_stream_sys_t;
 
@@ -119,10 +122,14 @@ struct sout_stream_id_sys_t
          struct
          {
              filter_chain_t  *p_f_chain; /**< Video filters */
+             filter_chain_t  *p_conv_nonstatic;
+             filter_chain_t  *p_conv_static;
              filter_chain_t  *p_uf_chain; /**< User-specified video filters */
-             filter_t        *p_spu_blender;
+             filter_chain_t  *p_final_conv_static;
+             vlc_blender_t   *p_spu_blender;
              spu_t           *p_spu;
-             video_format_t  fmt_input_video;
+             vlc_decoder_device *dec_dev;
+             vlc_video_context *enc_vctx_in;
          };
          struct
          {
@@ -130,7 +137,10 @@ struct sout_stream_id_sys_t
              audio_format_t  fmt_input_audio;
          };
     };
-    es_format_t decoder_out; /* only rw from pf_*_format_update() */
+
+    /* only rw from pf_*_format_update() */
+    es_format_t decoder_out;
+
     const sout_filters_config_t *p_filterscfg;
 
     /* Encoder */
@@ -170,6 +180,15 @@ static inline void es_format_SetMeta( es_format_t *p_dst, const es_format_t *p_s
     }
 }
 
+static inline void transcode_remove_filters( filter_chain_t **pp )
+{
+    if( *pp )
+    {
+        filter_chain_Delete( *pp );
+        *pp = NULL;
+    }
+}
+
 /* SPU */
 
 void transcode_spu_clean  ( sout_stream_t *, sout_stream_id_sys_t * );
@@ -179,7 +198,7 @@ int  transcode_spu_init   ( sout_stream_t *, const es_format_t *, sout_stream_id
 
 /* AUDIO */
 
-void transcode_audio_clean  ( sout_stream_id_sys_t * );
+void transcode_audio_clean  ( sout_stream_t *, sout_stream_id_sys_t * );
 int  transcode_audio_process( sout_stream_t *, sout_stream_id_sys_t *,
                                      block_t *, block_t ** );
 int  transcode_audio_init   ( sout_stream_t *, const es_format_t *,
@@ -187,10 +206,10 @@ int  transcode_audio_init   ( sout_stream_t *, const es_format_t *,
 
 /* VIDEO */
 
-void transcode_video_clean  ( sout_stream_t *, sout_stream_id_sys_t * );
+void transcode_video_clean  ( sout_stream_id_sys_t * );
 int  transcode_video_process( sout_stream_t *, sout_stream_id_sys_t *,
                                      block_t *, block_t ** );
-int transcode_video_get_output_dimensions( sout_stream_t *, sout_stream_id_sys_t *,
+int transcode_video_get_output_dimensions( sout_stream_id_sys_t *,
                                            unsigned *w, unsigned *h );
 void transcode_video_push_spu( sout_stream_t *, sout_stream_id_sys_t *, subpicture_t * );
 int  transcode_video_init    ( sout_stream_t *, const es_format_t *,

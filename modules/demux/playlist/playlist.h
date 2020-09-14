@@ -2,7 +2,6 @@
  * playlist.h:  Playlist import module common functions
  *****************************************************************************
  * Copyright (C) 2004 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Sigmund Augdal Helberg <dnumgis@videolan.org>
  *
@@ -57,10 +56,12 @@ void Close_BDMV ( vlc_object_t * );
 
 int Import_iTML ( vlc_object_t * );
 
+int Import_WMS(vlc_object_t *);
+
 int Import_WPL ( vlc_object_t * );
 void Close_WPL ( vlc_object_t * );
 
-#define GetCurrentItem(obj) input_GetItem((obj)->p_input)
+#define GetCurrentItem(obj) ((obj)->p_input_item)
 #define GetSource(obj) ((obj)->s)
 
 #define CHECK_FILE(obj) \

@@ -79,7 +79,7 @@ static ULONG vlc_DosWaitEventSemEx( HEV hev, ULONG ulTimeout )
     int       n;
     ULONG     rc;
 
-    struct vlc_thread *th = vlc_thread_self ();
+    struct vlc_thread *th = vlc_threadvar_get(thread_key);
     if( th == NULL || !th->killable )
     {
         /* Main thread - cannot be cancelled anyway
@@ -134,8 +134,6 @@ static vlc_mutex_t super_mutex;
 static vlc_cond_t  super_variable;
 extern vlc_rwlock_t config_lock;
 
-static void vlc_static_cond_destroy_all(void);
-
 int _CRT_init(void);
 void _CRT_term(void);
 
@@ -161,9 +159,6 @@ unsigned long _System _DLL_InitTerm(unsigned long hmod, unsigned long flag)
         case 1 :    /* Termination */
             vlc_rwlock_destroy (&config_lock);
             vlc_threadvar_delete (&thread_key);
-            vlc_cond_destroy (&super_variable);
-            vlc_mutex_destroy (&super_mutex);
-            vlc_static_cond_destroy_all ();
 
             _CRT_term();
 
@@ -171,289 +166,6 @@ unsigned long _System _DLL_InitTerm(unsigned long hmod, unsigned long flag)
     }
 
     return 0;   /* Failed */
-}
-
-/*** Mutexes ***/
-void vlc_mutex_init( vlc_mutex_t *p_mutex )
-{
-    /* This creates a recursive mutex. This is OK as fast mutexes have
-     * no defined behavior in case of recursive locking. */
-    DosCreateMutexSem( NULL, &p_mutex->hmtx, 0, FALSE );
-    p_mutex->dynamic = true;
-}
-
-void vlc_mutex_init_recursive( vlc_mutex_t *p_mutex )
-{
-    DosCreateMutexSem( NULL, &p_mutex->hmtx, 0, FALSE );
-    p_mutex->dynamic = true;
-}
-
-
-void vlc_mutex_destroy (vlc_mutex_t *p_mutex)
-{
-    assert (p_mutex->dynamic);
-    DosCloseMutexSem( p_mutex->hmtx );
-}
-
-void vlc_mutex_lock (vlc_mutex_t *p_mutex)
-{
-    if (!p_mutex->dynamic)
-    {   /* static mutexes */
-        int canc = vlc_savecancel ();
-        assert (p_mutex != &super_mutex); /* this one cannot be static */
-
-        vlc_mutex_lock (&super_mutex);
-        while (p_mutex->locked)
-        {
-            p_mutex->contention++;
-            vlc_cond_wait (&super_variable, &super_mutex);
-            p_mutex->contention--;
-        }
-        p_mutex->locked = true;
-        vlc_mutex_unlock (&super_mutex);
-        vlc_restorecancel (canc);
-        return;
-    }
-
-    DosRequestMutexSem(p_mutex->hmtx, SEM_INDEFINITE_WAIT);
-}
-
-int vlc_mutex_trylock (vlc_mutex_t *p_mutex)
-{
-    if (!p_mutex->dynamic)
-    {   /* static mutexes */
-        int ret = EBUSY;
-
-        assert (p_mutex != &super_mutex); /* this one cannot be static */
-        vlc_mutex_lock (&super_mutex);
-        if (!p_mutex->locked)
-        {
-            p_mutex->locked = true;
-            ret = 0;
-        }
-        vlc_mutex_unlock (&super_mutex);
-        return ret;
-    }
-
-    return DosRequestMutexSem( p_mutex->hmtx, 0 ) ? EBUSY : 0;
-}
-
-void vlc_mutex_unlock (vlc_mutex_t *p_mutex)
-{
-    if (!p_mutex->dynamic)
-    {   /* static mutexes */
-        assert (p_mutex != &super_mutex); /* this one cannot be static */
-
-        vlc_mutex_lock (&super_mutex);
-        assert (p_mutex->locked);
-        p_mutex->locked = false;
-        if (p_mutex->contention)
-            vlc_cond_broadcast (&super_variable);
-        vlc_mutex_unlock (&super_mutex);
-        return;
-    }
-
-    DosReleaseMutexSem( p_mutex->hmtx );
-}
-
-/*** Condition variables ***/
-typedef struct vlc_static_cond_t vlc_static_cond_t;
-
-struct vlc_static_cond_t
-{
-    vlc_cond_t condvar;
-    vlc_static_cond_t *next;
-};
-
-static vlc_static_cond_t *static_condvar_start = NULL;
-
-static void vlc_static_cond_init (vlc_cond_t *p_condvar)
-{
-    vlc_mutex_lock (&super_mutex);
-
-    if (p_condvar->hev == NULLHANDLE)
-    {
-        vlc_cond_init (p_condvar);
-
-        vlc_static_cond_t *new_static_condvar;
-
-        new_static_condvar = malloc (sizeof (*new_static_condvar));
-        if (unlikely (!new_static_condvar))
-            abort();
-
-        memcpy (&new_static_condvar->condvar, p_condvar, sizeof (*p_condvar));
-        new_static_condvar->next = static_condvar_start;
-        static_condvar_start = new_static_condvar;
-    }
-
-    vlc_mutex_unlock (&super_mutex);
-}
-
-static void vlc_static_cond_destroy_all (void)
-{
-    vlc_static_cond_t *static_condvar;
-    vlc_static_cond_t *static_condvar_next;
-
-
-    for (static_condvar = static_condvar_start; static_condvar;
-         static_condvar = static_condvar_next)
-    {
-        static_condvar_next = static_condvar->next;
-
-        vlc_cond_destroy (&static_condvar->condvar);
-        free (static_condvar);
-    }
-}
-
-void vlc_cond_init (vlc_cond_t *p_condvar)
-{
-    if (DosCreateEventSem (NULL, &p_condvar->hev, 0, FALSE) ||
-        DosCreateEventSem (NULL, &p_condvar->hevAck, 0, FALSE))
-        abort();
-
-    p_condvar->waiters = 0;
-    p_condvar->signaled = 0;
-}
-
-void vlc_cond_init_daytime (vlc_cond_t *p_condvar)
-{
-    vlc_cond_init (p_condvar);
-}
-
-void vlc_cond_destroy (vlc_cond_t *p_condvar)
-{
-    DosCloseEventSem( p_condvar->hev );
-    DosCloseEventSem( p_condvar->hevAck );
-}
-
-void vlc_cond_signal (vlc_cond_t *p_condvar)
-{
-    if (p_condvar->hev == NULLHANDLE)
-        vlc_static_cond_init (p_condvar);
-
-    if (!__atomic_cmpxchg32 (&p_condvar->waiters, 0, 0))
-    {
-        ULONG ulPost;
-
-        __atomic_xchg (&p_condvar->signaled, 1);
-        DosPostEventSem (p_condvar->hev);
-
-        DosWaitEventSem (p_condvar->hevAck, SEM_INDEFINITE_WAIT);
-        DosResetEventSem (p_condvar->hevAck, &ulPost);
-    }
-}
-
-void vlc_cond_broadcast (vlc_cond_t *p_condvar)
-{
-    if (p_condvar->hev == NULLHANDLE)
-        vlc_static_cond_init (p_condvar);
-
-    while (!__atomic_cmpxchg32 (&p_condvar->waiters, 0, 0))
-        vlc_cond_signal (p_condvar);
-}
-
-static int vlc_cond_wait_common (vlc_cond_t *p_condvar, vlc_mutex_t *p_mutex,
-                                 ULONG ulTimeout)
-{
-    ULONG ulPost;
-    ULONG rc;
-
-    assert(p_condvar->hev != NULLHANDLE);
-
-    do
-    {
-        vlc_testcancel();
-
-        __atomic_increment (&p_condvar->waiters);
-
-        vlc_mutex_unlock (p_mutex);
-
-        do
-        {
-            rc = vlc_WaitForSingleObject( p_condvar->hev, ulTimeout );
-            if (rc == NO_ERROR)
-                DosResetEventSem (p_condvar->hev, &ulPost);
-        } while (rc == NO_ERROR &&
-                 __atomic_cmpxchg32 (&p_condvar->signaled, 0, 1) == 0);
-
-        __atomic_decrement (&p_condvar->waiters);
-
-        DosPostEventSem (p_condvar->hevAck);
-
-        vlc_mutex_lock (p_mutex);
-    } while( rc == ERROR_INTERRUPT );
-
-    return rc ? ETIMEDOUT : 0;
-}
-
-void vlc_cond_wait (vlc_cond_t *p_condvar, vlc_mutex_t *p_mutex)
-{
-    if (p_condvar->hev == NULLHANDLE)
-        vlc_static_cond_init (p_condvar);
-
-    vlc_cond_wait_common (p_condvar, p_mutex, SEM_INDEFINITE_WAIT);
-}
-
-int vlc_cond_timedwait (vlc_cond_t *p_condvar, vlc_mutex_t *p_mutex,
-                        vlc_tick_t deadline)
-{
-    ULONG ulTimeout;
-
-    vlc_tick_t total = vlc_tick_now();
-    total = (deadline - total) / 1000;
-    if( total < 0 )
-        total = 0;
-
-    ulTimeout = ( total > 0x7fffffff ) ? 0x7fffffff : total;
-
-    return vlc_cond_wait_common (p_condvar, p_mutex, ulTimeout);
-}
-
-int vlc_cond_timedwait_daytime (vlc_cond_t *p_condvar, vlc_mutex_t *p_mutex,
-                                time_t deadline)
-{
-    ULONG ulTimeout;
-    vlc_tick_t total;
-    struct timeval tv;
-
-    gettimeofday (&tv, NULL);
-
-    total = vlc_tick_from_timeval( &tv );
-    total = (deadline - total) / 1000;
-    if( total < 0 )
-        total = 0;
-
-    ulTimeout = ( total > 0x7fffffff ) ? 0x7fffffff : total;
-
-    return vlc_cond_wait_common (p_condvar, p_mutex, ulTimeout);
-}
-
-void vlc_once(vlc_once_t *once, void (*cb)(void))
-{
-    unsigned done;
-
-    /* load once->done */
-    __atomic_xchg( &done, once->done );
-
-    /* not initialized ? */
-    if( done == 0 )
-    {
-        vlc_mutex_lock( &once->mutex );
-
-        /* load once->done */
-        __atomic_xchg( &done, once->done );
-
-        /* still not initialized ? */
-        if( done == 0 )
-        {
-            cb();
-
-            /* set once->done to 1 */
-            __atomic_xchg( &once->done, 1 );
-        }
-
-        vlc_mutex_unlock( &once->mutex );
-    }
 }
 
 /*** Thread-specific variables (TLS) ***/
@@ -666,11 +378,6 @@ int vlc_set_priority (vlc_thread_t th, int priority)
     return VLC_SUCCESS;
 }
 
-vlc_thread_t vlc_thread_self (void)
-{
-    return vlc_threadvar_get (thread_key);
-}
-
 unsigned long vlc_thread_id (void)
 {
     return _gettid();
@@ -697,7 +404,7 @@ int vlc_savecancel (void)
 {
     int state;
 
-    struct vlc_thread *th = vlc_thread_self ();
+    struct vlc_thread *th = vlc_threadvar_get(thread_key);
     if (th == NULL)
         return false; /* Main thread - cannot be cancelled anyway */
 
@@ -708,7 +415,7 @@ int vlc_savecancel (void)
 
 void vlc_restorecancel (int state)
 {
-    struct vlc_thread *th = vlc_thread_self ();
+    struct vlc_thread *th = vlc_threadvar_get(thread_key);
     assert (state == false || state == true);
 
     if (th == NULL)
@@ -720,7 +427,7 @@ void vlc_restorecancel (int state)
 
 void vlc_testcancel (void)
 {
-    struct vlc_thread *th = vlc_thread_self ();
+    struct vlc_thread *th = vlc_threadvar_get(thread_key);
     if (th == NULL)
         return; /* Main thread - cannot be cancelled anyway */
 
@@ -741,42 +448,32 @@ void vlc_testcancel (void)
     }
 }
 
-void vlc_control_cancel (int cmd, ...)
+void vlc_control_cancel (vlc_cleanup_t *cleaner)
 {
     /* NOTE: This function only modifies thread-specific data, so there is no
      * need to lock anything. */
-    va_list ap;
 
-    struct vlc_thread *th = vlc_thread_self ();
+    struct vlc_thread *th = vlc_threadvar_get(thread_key);
     if (th == NULL)
         return; /* Main thread - cannot be cancelled anyway */
 
-    va_start (ap, cmd);
-    switch (cmd)
+    if (cleaner != NULL)
     {
-        case VLC_CLEANUP_PUSH:
-        {
-            /* cleaner is a pointer to the caller stack, no need to allocate
-             * and copy anything. As a nice side effect, this cannot fail. */
-            vlc_cleanup_t *cleaner = va_arg (ap, vlc_cleanup_t *);
-            cleaner->next = th->cleaners;
-            th->cleaners = cleaner;
-            break;
-        }
-
-        case VLC_CLEANUP_POP:
-        {
-            th->cleaners = th->cleaners->next;
-            break;
-        }
+        /* cleaner is a pointer to the caller stack, no need to allocate
+            * and copy anything. As a nice side effect, this cannot fail. */
+        cleaner->next = th->cleaners;
+        th->cleaners = cleaner;
     }
-    va_end (ap);
+    else
+    {
+        th->cleaners = th->cleaners->next;
+    }
 }
 
 static int vlc_select( int nfds, fd_set *rdset, fd_set *wrset, fd_set *exset,
                        struct timeval *timeout )
 {
-    struct vlc_thread *th = vlc_thread_self( );
+    struct vlc_thread *th = vlc_threadvar_get(thread_key);
 
     int rc;
 
@@ -909,7 +606,7 @@ vlc_tick_t vlc_tick_now (void)
     /* We need to split the division to avoid 63-bits overflow */
     lldiv_t d = lldiv (Q2LL(counter), freq);
 
-    return vlc_tick_from_sec( d.quot ) + ((d.rem * CLOCK_FREQ) / freq);
+    return vlc_tick_from_sec( d.quot ) + vlc_tick_from_samples(d.rem, freq);
 }
 
 #undef vlc_tick_wait

@@ -111,8 +111,40 @@ function durationtostring(duration)
 end
 
 -- realpath
+-- this is for URL paths - do not use for file paths as this has
+-- no support for Windows '\' directory separators
 function realpath(path)
-    return string.gsub(string.gsub(string.gsub(string.gsub(path,"/%.%./[^/]+","/"),"/[^/]+/%.%./","/"),"/%./","/"),"//","/")
+    -- detect URLs to extract and process the path component
+    local s, p, qf = string.match(path, "^([a-zA-Z0-9+%-%.]-://[^/]-)(/[^?#]*)(.*)$")
+    if not s then
+        s = ""
+        p = path
+        qf = ""
+    end
+
+    local n
+    repeat
+        p, n = p:gsub("//","/", 1)
+    until n == 0
+
+    repeat
+        p, n = p:gsub("/%./","/", 1)
+    until n == 0
+    p = p:gsub("/%.$", "/", 1)
+
+    -- resolving ".." without an absolute path would be troublesome
+    if p:match("^/") then
+        repeat
+            p, n = p:gsub("^/%.%./","/", 1)
+            if n == 0 then
+                p, n = p:gsub("/[^/]+/%.%./","/", 1)
+            end
+        until n == 0
+        p = p:gsub("^/%.%.$","/", 1)
+        p = p:gsub("/[^/]+/%.%.$","/", 1)
+    end
+
+    return s..p..qf
 end
 
 -- parse the time from a string and return the seconds
@@ -145,24 +177,23 @@ end
 
 -- seek
 function seek(value)
-    local input = vlc.object.input()
-    if input ~= nil and value ~= nil then
+    if value ~= nil then
         if string.sub(value,-1) == "%" then
             local number = us_tonumber(string.sub(value,1,-2))
             if number ~= nil then
                 local posPercent = number/100
                 if string.sub(value,1,1) == "+" or string.sub(value,1,1) == "-" then
-                    vlc.var.set(input,"position",vlc.var.get(input,"position") + posPercent)
+                    vlc.player.seek_by_pos_relative(posPercent);
                 else
-                    vlc.var.set(input,"position",posPercent)
+                    vlc.player.seek_by_pos_absolute(posPercent);
                 end
             end
         else
-            local posTime = parsetime(value)
+            local posTime = parsetime(value) * 1000000 -- secs to usecs
             if string.sub(value,1,1) == "+" or string.sub(value,1,1) == "-" then
-                vlc.var.set(input,"time",vlc.var.get(input,"time") + (posTime * 1000000))
+                vlc.player.seek_by_time_relative(posTime)
             else
-                vlc.var.set(input,"time",posTime * 1000000)
+                vlc.player.seek_by_time_absolute(posTime)
             end
         end
     end

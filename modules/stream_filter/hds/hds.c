@@ -1167,7 +1167,9 @@ static void* live_thread( void* p )
             vlc_stream_Delete( download_stream );
         }
 
-        vlc_tick_wait( last_dl_start_time + (CLOCK_FREQ * hds_stream->fragment_runs[hds_stream->fragment_run_count-1].fragment_duration) / hds_stream->afrt_timescale);
+        vlc_tick_wait( last_dl_start_time +
+                       vlc_tick_from_samples(hds_stream->fragment_runs[hds_stream->fragment_run_count-1].fragment_duration,
+                                             hds_stream->afrt_timescale) );
 
 
     }
@@ -1216,13 +1218,6 @@ static void cleanup_Manifest( manifest_t *m )
 
     if( m->vlc_reader )
         xml_ReaderDelete( m->vlc_reader );
-}
-
-static void cleanup_threading( hds_stream_t *stream )
-{
-    vlc_mutex_destroy( &stream->dl_lock );
-    vlc_cond_destroy( &stream->dl_cond );
-    vlc_mutex_destroy( &stream->abst_lock );
 }
 
 static void write_int_24( uint8_t *p, uint32_t val )
@@ -1535,7 +1530,6 @@ static int parse_Manifest( stream_t *s, manifest_t *m )
                     if( !(new_stream->url = strdup( medias[i].media_url ) ) )
                     {
                         free( media_id );
-                        cleanup_threading( new_stream );
                         free( new_stream );
                         return VLC_ENOMEM;
                     }
@@ -1548,7 +1542,6 @@ static int parse_Manifest( stream_t *s, manifest_t *m )
                     {
                         free( new_stream->url );
                         free( media_id );
-                        cleanup_threading( new_stream );
                         free( new_stream );
                         return VLC_ENOMEM;
                     }
@@ -1586,7 +1579,6 @@ static int parse_Manifest( stream_t *s, manifest_t *m )
                         free( new_stream->metadata );
                         free( new_stream->url );
                         free( media_id );
-                        cleanup_threading( new_stream );
                         free( new_stream );
                         return VLC_ENOMEM;
                     }
@@ -1616,8 +1608,6 @@ static void hds_free( hds_stream_t *p_stream )
     FREENULL( p_stream->quality_segment_modifier );
 
     FREENULL( p_stream->abst_url );
-
-    cleanup_threading( p_stream );
 
     FREENULL( p_stream->metadata );
     FREENULL( p_stream->url );

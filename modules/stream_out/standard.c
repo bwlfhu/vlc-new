@@ -2,7 +2,6 @@
  * standard.c: standard stream output module
  *****************************************************************************
  * Copyright (C) 2003-2011 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *
@@ -35,6 +34,7 @@
 #include <vlc_network.h>
 #include <vlc_url.h>
 #include <vlc_memstream.h>
+#include "sdp_helper.h"
 
 /*****************************************************************************
  * Module descriptor
@@ -64,16 +64,6 @@
 #define DESC_LONGTEXT N_( \
     "This allows you to give a short description with details about the stream, " \
     "that will be announced in the SDP (Session Descriptor)." )
-#define URL_TEXT N_("Session URL")
-#define URL_LONGTEXT N_( \
-    "This allows you to give a URL with more details about the stream " \
-    "(often the website of the streaming organization), that will " \
-    "be announced in the SDP (Session Descriptor)." )
-#define EMAIL_TEXT N_("Session email")
-#define EMAIL_LONGTEXT N_( \
-    "This allows you to give a contact mail address for the stream, that will " \
-    "be announced in the SDP (Session Descriptor)." )
-
 #define SAP_TEXT N_("SAP announcing")
 #define SAP_LONGTEXT N_("Announce this session with SAP.")
 
@@ -91,7 +81,7 @@ static void     Close   ( vlc_object_t * );
 vlc_module_begin ()
     set_shortname( N_("Standard"))
     set_description( N_("Standard stream output") )
-    set_capability( "sout stream", 50 )
+    set_capability( "sout output", 50 )
     add_shortcut( "standard", "std", "file", "http", "udp", SRT_SHORTCUT )
     set_category( CAT_SOUT )
     set_subcategory( SUBCAT_SOUT_STREAM )
@@ -105,8 +95,8 @@ vlc_module_begin ()
     add_string( SOUT_CFG_PREFIX "name", "", NAME_TEXT, NAME_LONGTEXT, true )
     add_obsolete_string( SOUT_CFG_PREFIX "group" ) /* since 2.1.0 */
     add_string( SOUT_CFG_PREFIX "description", "", DESC_TEXT, DESC_LONGTEXT, true )
-    add_string( SOUT_CFG_PREFIX "url", "", URL_TEXT, URL_LONGTEXT, true )
-    add_string( SOUT_CFG_PREFIX "email", "", EMAIL_TEXT, EMAIL_LONGTEXT, true )
+    add_obsolete_string( SOUT_CFG_PREFIX "url" ) /* since 4.0.0 */
+    add_obsolete_string( SOUT_CFG_PREFIX "email" ) /* since 4.0.0 */
     add_obsolete_string( SOUT_CFG_PREFIX "phone" ) /* since 3.0.0 */
 
     set_callbacks( Open, Close )
@@ -118,7 +108,7 @@ vlc_module_end ()
  *****************************************************************************/
 static const char *const ppsz_sout_options[] = {
     "access", "mux", "url", "dst",
-    "sap", "name", "description", "url", "email",
+    "sap", "name", "description",
     "bind", "path", NULL
 };
 
@@ -385,7 +375,7 @@ static int Open( vlc_object_t *p_this )
         goto end;
     }
 
-    p_sys->p_mux = sout_MuxNew( p_stream->p_sout, psz_mux, p_access );
+    p_sys->p_mux = sout_MuxNew( p_access, psz_mux );
     if( !p_sys->p_mux )
     {
         const char *psz_mux_guess = getMuxFromAlias( psz_mux );
@@ -393,7 +383,7 @@ static int Open( vlc_object_t *p_this )
         {
             msg_Dbg( p_stream, "Couldn't open mux `%s', trying `%s' instead",
                 psz_mux, psz_mux_guess );
-            p_sys->p_mux = sout_MuxNew( p_stream->p_sout, psz_mux_guess, p_access );
+            p_sys->p_mux = sout_MuxNew( p_access, psz_mux_guess );
         }
 
         if( !p_sys->p_mux )

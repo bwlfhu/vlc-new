@@ -1,6 +1,7 @@
---- libvpx/build/make/configure.sh.orig	2018-07-09 18:57:29.774826691 -0400
-+++ libvpx/build/make/configure.sh	2018-07-09 19:00:34.427868074 -0400
-@@ -818,84 +818,6 @@
+diff -ruw libvpx-1.9.0.orig/build/make/configure.sh libvpx-1.9.0/build/make/configure.sh
+--- libvpx-1.9.0.orig/build/make/configure.sh	2020-07-30 15:59:15.000000000 -0400
++++ libvpx-1.9.0/build/make/configure.sh	2020-09-01 09:32:08.722717206 -0400
+@@ -832,96 +832,6 @@
    # PIC is probably what we want when building shared libs
    enabled shared && soft_enable pic
  
@@ -11,7 +12,7 @@
 -    IOS_VERSION_MIN="8.0"
 -  else
 -    IOS_VERSION_OPTIONS=""
--    IOS_VERSION_MIN="6.0"
+-    IOS_VERSION_MIN="7.0"
 -  fi
 -
 -  # Handle darwin variants. Newer SDKs allow targeting older
@@ -71,6 +72,18 @@
 -      add_cflags  "-mmacosx-version-min=10.12"
 -      add_ldflags "-mmacosx-version-min=10.12"
 -      ;;
+-    *-darwin17-*)
+-      add_cflags  "-mmacosx-version-min=10.13"
+-      add_ldflags "-mmacosx-version-min=10.13"
+-      ;;
+-    *-darwin18-*)
+-      add_cflags  "-mmacosx-version-min=10.14"
+-      add_ldflags "-mmacosx-version-min=10.14"
+-      ;;
+-    *-darwin19-*)
+-      add_cflags  "-mmacosx-version-min=10.15"
+-      add_ldflags "-mmacosx-version-min=10.15"
+-      ;;
 -    *-iphonesimulator-*)
 -      add_cflags  "-miphoneos-version-min=${IOS_VERSION_MIN}"
 -      add_ldflags "-miphoneos-version-min=${IOS_VERSION_MIN}"
@@ -85,30 +98,16 @@
    # Handle Solaris variants. Solaris 10 needs -lposix4
    case ${toolchain} in
      sparc-solaris-*)
-@@ -1086,12 +1012,6 @@
-             add_cflags -isysroot ${alt_libc}
-           fi
+@@ -1110,12 +1020,6 @@
+               add_cflags -isysroot ${alt_libc}
+             fi
  
--          if [ "${LD}" = "${CXX}" ]; then
--            add_ldflags -miphoneos-version-min="${IOS_VERSION_MIN}"
--          else
--            add_ldflags -ios_version_min "${IOS_VERSION_MIN}"
--          fi
+-            if [ "${LD}" = "${CXX}" ]; then
+-              add_ldflags -miphoneos-version-min="${IOS_VERSION_MIN}"
+-            else
+-              add_ldflags -ios_version_min "${IOS_VERSION_MIN}"
+-            fi
 -
-           for d in lib usr/lib usr/lib/system; do
-             try_dir="${alt_libc}/${d}"
-             [ -d "${try_dir}" ] && add_ldflags -L"${try_dir}"
-@@ -1264,6 +1184,13 @@
-       case ${tgt_cc} in
-         gcc*)
-           add_cflags -m${bits}
-+          case ${tgt_os} in
-+              darwin*)
-+              ;;
-+              *)
-+              add_ldflags -m${bits}
-+              ;;
-+          esac
-           add_ldflags -m${bits}
-           ;;
-       esac
+             for d in lib usr/lib usr/lib/system; do
+               try_dir="${alt_libc}/${d}"
+               [ -d "${try_dir}" ] && add_ldflags -L"${try_dir}"

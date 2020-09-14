@@ -29,7 +29,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
-#ifdef HAVE_POLL
+#ifdef HAVE_POLL_H
 #include <poll.h>
 #endif
 #ifdef HAVE_SYS_EVENTFD_H
@@ -71,7 +71,6 @@ vlc_interrupt_t *vlc_interrupt_create(void)
 void vlc_interrupt_deinit(vlc_interrupt_t *ctx)
 {
     assert(ctx->callback == NULL);
-    vlc_mutex_destroy(&ctx->lock);
 }
 
 void vlc_interrupt_destroy(vlc_interrupt_t *ctx)
@@ -218,11 +217,9 @@ static void vlc_mwait_i11e_wake(void *opaque)
 static void vlc_mwait_i11e_cleanup(void *opaque)
 {
     vlc_interrupt_t *ctx = opaque;
-    vlc_cond_t *cond = ctx->data;
 
     vlc_mutex_unlock(&ctx->lock);
     vlc_interrupt_finish(ctx);
-    vlc_cond_destroy(cond);
 }
 
 int vlc_mwait_i11e(vlc_tick_t deadline)
@@ -243,9 +240,7 @@ int vlc_mwait_i11e(vlc_tick_t deadline)
     vlc_cleanup_pop();
     vlc_mutex_unlock(&ctx->lock);
 
-    int ret = vlc_interrupt_finish(ctx);
-    vlc_cond_destroy(&wait);
-    return ret;
+    return vlc_interrupt_finish(ctx);
 }
 
 static void vlc_interrupt_forward_wake(void *opaque)
@@ -510,8 +505,8 @@ ssize_t vlc_sendmsg_i11e(int fd, const struct msghdr *msg, int flags)
 
     if (vlc_poll_i11e(&ufd, 1, -1) < 0)
         return -1;
-    /* NOTE: MSG_EOR, MSG_OOB and MSG_NOSIGNAL should all work fine here. */
-    return sendmsg(fd, msg, flags);
+    /* NOTE: MSG_EOR and MSG_OOB should all work fine here. */
+    return vlc_sendmsg(fd, msg, flags);
 }
 
 ssize_t vlc_sendto_i11e(int fd, const void *buf, size_t len, int flags,

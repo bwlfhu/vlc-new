@@ -2,7 +2,6 @@
  * gradient.c : Gradient and edge detection video effects plugin for vlc
  *****************************************************************************
  * Copyright (C) 2000-2008 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Samuel Hocevar <sam@zoy.org>
  *          Antoine Cellerier <dionoea -at- videolan -dot- org>
@@ -224,7 +223,6 @@ static void Destroy( vlc_object_t *p_this )
                      GradientCallback, p_sys );
     var_DelCallback( p_filter, FILTER_PREFIX "cartoon",
                      GradientCallback, p_sys );
-    vlc_mutex_destroy( &p_sys->lock );
 
     free( p_sys->p_buf32 );
     free( p_sys->p_buf32_bis );

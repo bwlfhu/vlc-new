@@ -2,7 +2,6 @@
  * simple.c : simple channel mixer plug-in
  *****************************************************************************
  * Copyright (C) 2002, 2004, 2006-2009 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Gildas Bazin <gbazin@videolan.org>
  *
@@ -44,7 +43,7 @@ vlc_module_begin ()
     set_category( CAT_AUDIO )
     set_subcategory( SUBCAT_AUDIO_MISC )
     set_capability( "audio converter", 10 )
-    set_callbacks( OpenFilter, NULL );
+    set_callback( OpenFilter );
 vlc_module_end ()
 
 static block_t *Filter( filter_t *, block_t * );

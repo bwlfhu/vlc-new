@@ -125,7 +125,10 @@ std::string Url::toString(size_t index, const BaseRepresentation *rep) const
             ret = part;
         else
         {
-            char *psz_resolved = vlc_uri_resolve( ret.c_str(), part.c_str() );
+            char *psz_fixup = vlc_uri_fixup( part.c_str() );
+            char *psz_resolved = vlc_uri_resolve( ret.c_str(),
+                                                  psz_fixup ? psz_fixup : part.c_str() );
+            free(psz_fixup);
             if( psz_resolved )
             {
                 ret = std::string( psz_resolved );
@@ -137,7 +140,7 @@ std::string Url::toString(size_t index, const BaseRepresentation *rep) const
     return ret;
 }
 
-Url::Component::Component(const std::string & str, const MediaSegmentTemplate *templ_)
+Url::Component::Component(const std::string & str, const BaseSegmentTemplate *templ_)
  : component(str), templ(templ_), b_scheme(false), b_dir(false), b_absolute(false)
 {
     if(!component.empty())

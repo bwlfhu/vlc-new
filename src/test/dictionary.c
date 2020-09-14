@@ -3,7 +3,6 @@
  * dictionary.c: Tests for vlc_dictionary_t
  *****************************************************************************
  * Copyright (C) 2007 Pierre d'Herbemont
- * $Id$
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
@@ -66,7 +65,7 @@ int main (void)
     static const char * our_keys[] = {
         "Hello", "Hella", "flowmeter", "Frostnipped", "frostnipped", "remiform", "quadrifoliolate", "singularity", "unafflicted"
     };
-    const int size = sizeof(our_keys)/sizeof(our_keys[0]);
+    const int size = ARRAY_SIZE(our_keys);
     char ** keys;
     intptr_t i = 0;
 

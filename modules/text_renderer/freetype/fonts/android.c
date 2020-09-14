@@ -2,7 +2,6 @@
  * freetype.c : Put text on the video, using freetype2
  *****************************************************************************
  * Copyright (C) 2002 - 2015 VLC authors and VideoLAN
- * $Id$
  *
  * Authors: Sigmund Augdal Helberg <dnumgis@videolan.org>
  *          Gildas Bazin <gbazin@videolan.org>
@@ -41,18 +40,17 @@
 # include <vlc_stream.h>
 
 #include "../platform_fonts.h"
+#include "backends.h"
 
 #define ANDROID_SYSTEM_FONTS_NOUGAT  "file:///system/etc/fonts.xml"
 #define ANDROID_SYSTEM_FONTS_LEGACY  "file:///system/etc/system_fonts.xml"
 #define ANDROID_FALLBACK_FONTS       "file:///system/etc/fallback_fonts.xml"
 #define ANDROID_VENDOR_FONTS         "file:///vendor/etc/fallback_fonts.xml"
-#define ANDROID_FONT_PATH            "/system/fonts"
 
-static int Android_ParseFont( filter_t *p_filter, xml_reader_t *p_xml,
+static int Android_ParseFont( vlc_font_select_t *fs, xml_reader_t *p_xml,
                               vlc_family_t *p_family )
 {
-    bool              b_bold      = false;
-    bool              b_italic    = false;
+    int               i_flags     = 0;
     const char       *psz_val     = NULL;
     const char       *psz_attr    = NULL;
     int               i_type      = 0;
@@ -60,21 +58,23 @@ static int Android_ParseFont( filter_t *p_filter, xml_reader_t *p_xml,
 
     while( ( psz_attr = xml_ReaderNextAttr( p_xml, &psz_val ) ) )
     {
-        if( !strcasecmp( "weight", psz_attr ) && psz_val && *psz_val )
+        if( !psz_val || !*psz_val )
+            continue;
+        if( !strcasecmp( "weight", psz_attr ) )
             i_weight = atoi( psz_val );
-        else if( !strcasecmp( "style", psz_attr ) && psz_val && *psz_val )
+        else if( !strcasecmp( "style", psz_attr ) )
             if( !strcasecmp( "italic", psz_val ) )
-                b_italic = true;
+                i_flags |= VLC_FONT_FLAG_ITALIC;
     }
 
     if( i_weight == 700 )
-        b_bold = true;
+        i_flags |= VLC_FONT_FLAG_BOLD;
 
     i_type = xml_ReaderNextNode( p_xml, &psz_val );
 
     if( i_type != XML_READER_TEXT || !psz_val || !*psz_val )
     {
-        msg_Warn( p_filter, "Android_ParseFont: no file name" );
+        msg_Warn( fs->p_obj, "Android_ParseFont: no file name" );
         return VLC_EGENERIC;
     }
 
@@ -84,21 +84,21 @@ static int Android_ParseFont( filter_t *p_filter, xml_reader_t *p_xml,
      * We don't need all font weights. Only 400 (regular) and 700 (bold)
      */
     if( i_weight == 400 || i_weight == 700 )
-        if( asprintf( &psz_fontfile, "%s/%s", ANDROID_FONT_PATH, psz_val ) < 0
-         || !NewFont( psz_fontfile, 0, b_bold, b_italic, p_family ) )
+        if( asprintf( &psz_fontfile, "%s/%s", SYSTEM_FONT_PATH, psz_val ) < 0
+         || !NewFont( psz_fontfile, 0, i_flags, p_family ) )
             return VLC_ENOMEM;
 
     return VLC_SUCCESS;
 }
 
-static int Android_Nougat_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
+static int Android_Nougat_ParseFamily( vlc_font_select_t *fs, xml_reader_t *p_xml )
 {
-    filter_sys_t     *p_sys       = p_filter->p_sys;
-    vlc_dictionary_t *p_dict      = &p_sys->family_map;
+    vlc_dictionary_t *p_dict      = &fs->family_map;
     vlc_family_t     *p_family    = NULL;
     const char       *psz_val     = NULL;
     const char       *psz_attr    = NULL;
     const char       *psz_name    = NULL;
+    char             *psz_lc      = NULL;
     int               i_type      = 0;
 
     while( ( psz_attr = xml_ReaderNextAttr( p_xml, &psz_val ) ) )
@@ -116,30 +116,30 @@ static int Android_Nougat_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
          * Family has a name. See if we have that name already.
          * If the name already exists, it's one of the font attachments.
          */
-        char *psz_lc = ToLower( psz_name );
+        psz_lc = LowercaseDup( psz_name );
         if( unlikely( !psz_lc ) )
             return VLC_ENOMEM;
 
         p_family = vlc_dictionary_value_for_key( p_dict, psz_lc );
-
-        free( psz_lc );
     }
 
     if( p_family == NULL )
     {
         /*
          * We are either parsing a nameless family, or a named family that
-         * was not previously added to p_sys->family_map.
+         * was not previously added to fs->family_map.
          *
          * Create a new family with the given name or, if psz_name is NULL,
          * with the name fallback-xxxx
          */
-        p_family = NewFamily( p_filter, psz_name, &p_sys->p_families,
-                              &p_sys->family_map, NULL );
-
-        if( unlikely( !p_family ) )
-            return VLC_ENOMEM;
+        p_family = NewFamilyFromMixedCase( fs, psz_lc, &fs->p_families,
+                              &fs->family_map, NULL );
     }
+
+    free( psz_lc );
+
+    if( unlikely( !p_family ) )
+        return VLC_ENOMEM;
 
     while( ( i_type = xml_ReaderNextNode( p_xml, &psz_val ) ) > 0 )
     {
@@ -147,7 +147,7 @@ static int Android_Nougat_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
         {
         case XML_READER_STARTELEM:
             if( !strcasecmp( "font", psz_val ) )
-                if( Android_ParseFont( p_filter, p_xml, p_family ) == VLC_ENOMEM )
+                if( Android_ParseFont( fs, p_xml, p_family ) == VLC_ENOMEM )
                     return VLC_ENOMEM;
             break;
 
@@ -161,8 +161,8 @@ static int Android_Nougat_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
                      * default fallback list.
                      */
                     vlc_family_t *p_fallback =
-                        NewFamily( p_filter, p_family->psz_name,
-                                   NULL, &p_sys->fallback_map, FB_LIST_DEFAULT );
+                        NewFamily( fs, p_family->psz_name,
+                                   NULL, &fs->fallback_map, FB_LIST_DEFAULT );
 
                     if( unlikely( !p_fallback ) )
                         return VLC_ENOMEM;
@@ -176,14 +176,13 @@ static int Android_Nougat_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
         }
     }
 
-    msg_Warn( p_filter, "Android_ParseFamily: Corrupt font configuration file" );
+    msg_Warn( fs->p_obj, "Android_ParseFamily: Corrupt font configuration file" );
     return VLC_EGENERIC;
 }
 
-static int Android_ParseAlias( filter_t *p_filter, xml_reader_t *p_xml )
+static int Android_ParseAlias( vlc_font_select_t *fs, xml_reader_t *p_xml )
 {
-    filter_sys_t     *p_sys       = p_filter->p_sys;
-    vlc_dictionary_t *p_dict      = &p_sys->family_map;
+    vlc_dictionary_t *p_dict      = &fs->family_map;
     vlc_family_t     *p_dest      = NULL;
     char             *psz_name    = NULL;
     char             *psz_dest    = NULL;
@@ -194,12 +193,14 @@ static int Android_ParseAlias( filter_t *p_filter, xml_reader_t *p_xml )
 
     while( ( psz_attr = xml_ReaderNextAttr( p_xml, &psz_val ) ) )
     {
-        if( !strcasecmp( "weight", psz_attr ) && psz_val && *psz_val )
+        if( !psz_val || !*psz_val )
+            continue;
+        if( !strcasecmp( "weight", psz_attr ) )
             i_weight = atoi( psz_val );
-        else if( !strcasecmp( "to", psz_attr ) && psz_val && *psz_val )
-            psz_dest = ToLower( psz_val );
-        else if( !strcasecmp( "name", psz_attr ) && psz_val && *psz_val )
-            psz_name = ToLower( psz_val );
+        else if( !strcasecmp( "to", psz_attr ) )
+            psz_dest = LowercaseDup( psz_val );
+        else if( !strcasecmp( "name", psz_attr ) )
+            psz_name = LowercaseDup( psz_val );
     }
 
     if( !psz_dest || !psz_name )
@@ -220,15 +221,12 @@ done:
     return i_ret;
 }
 
-static int Android_Legacy_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
+static int Android_Legacy_ParseFamily( vlc_font_select_t *fs, xml_reader_t *p_xml )
 {
-    filter_sys_t     *p_sys       = p_filter->p_sys;
-    vlc_dictionary_t *p_dict      = &p_sys->family_map;
+    vlc_dictionary_t *p_dict      = &fs->family_map;
     vlc_family_t     *p_family    = NULL;
     char             *psz_lc      = NULL;
     int               i_counter   = 0;
-    bool              b_bold      = false;
-    bool              b_italic    = false;
     const char       *p_node      = NULL;
     int               i_type      = 0;
 
@@ -252,11 +250,11 @@ static int Android_Legacy_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
 
                 if( i_type != XML_READER_TEXT || !p_node || !*p_node )
                 {
-                    msg_Warn( p_filter, "Android_ParseFamily: empty name" );
+                    msg_Warn( fs->p_obj, "Android_ParseFamily: empty name" );
                     continue;
                 }
 
-                psz_lc = ToLower( p_node );
+                psz_lc = LowercaseDup( p_node );
                 if( unlikely( !psz_lc ) )
                     return VLC_ENOMEM;
 
@@ -266,7 +264,7 @@ static int Android_Legacy_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
                     if( p_family == kVLCDictionaryNotFound )
                     {
                         p_family =
-                            NewFamily( p_filter, psz_lc, &p_sys->p_families, NULL, NULL );
+                            NewFamily( fs, psz_lc, &fs->p_families, NULL, NULL );
 
                         if( unlikely( !p_family ) )
                         {
@@ -298,38 +296,34 @@ static int Android_Legacy_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
                 }
 
                 if( !p_family )
-                    p_family = NewFamily( p_filter, NULL, &p_sys->p_families,
-                                          &p_sys->family_map, NULL );
+                    p_family = NewFamily( fs, NULL, &fs->p_families,
+                                          &fs->family_map, NULL );
 
                 if( unlikely( !p_family ) )
                     return VLC_ENOMEM;
 
+                int i_flags = 0;
                 switch( i_counter )
                 {
                 case 0:
-                    b_bold = false;
-                    b_italic = false;
                     break;
                 case 1:
-                    b_bold = true;
-                    b_italic = false;
+                    i_flags = VLC_FONT_FLAG_BOLD;
                     break;
                 case 2:
-                    b_bold = false;
-                    b_italic = true;
+                    i_flags = VLC_FONT_FLAG_ITALIC;
                     break;
                 case 3:
-                    b_bold = true;
-                    b_italic = true;
+                    i_flags = VLC_FONT_FLAG_BOLD | VLC_FONT_FLAG_ITALIC;
                     break;
                 default:
-                    msg_Warn( p_filter, "Android_ParseFamily: too many files" );
+                    msg_Warn( fs->p_obj, "Android_ParseFamily: too many files" );
                     return VLC_EGENERIC;
                 }
 
                 char *psz_fontfile = NULL;
-                if( asprintf( &psz_fontfile, "%s/%s", ANDROID_FONT_PATH, p_node ) < 0
-                 || !NewFont( psz_fontfile, 0, b_bold, b_italic, p_family ) )
+                if( asprintf( &psz_fontfile, "%s/%s", SYSTEM_FONT_PATH, p_node ) < 0
+                 || !NewFont( psz_fontfile, 0, i_flags, p_family ) )
                     return VLC_ENOMEM;
 
                 ++i_counter;
@@ -341,7 +335,7 @@ static int Android_Legacy_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
             {
                 if( !p_family )
                 {
-                    msg_Warn( p_filter, "Android_ParseFamily: empty family" );
+                    msg_Warn( fs->p_obj, "Android_ParseFamily: empty family" );
                     return VLC_EGENERIC;
                 }
 
@@ -352,8 +346,8 @@ static int Android_Legacy_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
                 if( strcasestr( p_family->psz_name, FB_NAME ) )
                 {
                     vlc_family_t *p_fallback =
-                        NewFamily( p_filter, p_family->psz_name,
-                                   NULL, &p_sys->fallback_map, FB_LIST_DEFAULT );
+                        NewFamily( fs, p_family->psz_name,
+                                   NULL, &fs->fallback_map, FB_LIST_DEFAULT );
 
                     if( unlikely( !p_fallback ) )
                         return VLC_ENOMEM;
@@ -367,20 +361,20 @@ static int Android_Legacy_ParseFamily( filter_t *p_filter, xml_reader_t *p_xml )
         }
     }
 
-    msg_Warn( p_filter, "Android_ParseOldFamily: Corrupt font configuration file" );
+    msg_Warn( fs->p_obj, "Android_ParseOldFamily: Corrupt font configuration file" );
     return VLC_EGENERIC;
 }
 
-static int Android_ParseSystemFonts( filter_t *p_filter, const char *psz_path,
+static int Android_ParseSystemFonts( vlc_font_select_t *fs, const char *psz_path,
                                      bool b_new_format )
 {
     int i_ret = VLC_SUCCESS;
-    stream_t *p_stream = vlc_stream_NewURL( p_filter, psz_path );
+    stream_t *p_stream = vlc_stream_NewURL( fs->p_obj, psz_path );
 
     if( !p_stream )
         return VLC_EGENERIC;
 
-    xml_reader_t *p_xml = xml_ReaderCreate( p_filter, p_stream );
+    xml_reader_t *p_xml = xml_ReaderCreate( fs->p_obj, p_stream );
 
     if( !p_xml )
     {
@@ -392,21 +386,21 @@ static int Android_ParseSystemFonts( filter_t *p_filter, const char *psz_path,
     int i_type;
     while( ( i_type = xml_ReaderNextNode( p_xml, &p_node ) ) > 0 )
     {
-        if( i_type == XML_READER_STARTELEM && !strcasecmp( "family", p_node ) && b_new_format )
+        if( i_type != XML_READER_STARTELEM )
+            continue;
+        int i_ret = 0;
+        if( !strcasecmp( "family", p_node ) )
         {
-            if( ( i_ret = Android_Nougat_ParseFamily( p_filter, p_xml ) ) )
-                break;
+            i_ret = b_new_format
+                  ? Android_Nougat_ParseFamily( fs, p_xml )
+                  : Android_Legacy_ParseFamily( fs, p_xml );
         }
-        else if( i_type == XML_READER_STARTELEM && !strcasecmp( "family", p_node ) && !b_new_format )
+        else if( !strcasecmp( "alias", p_node ) && b_new_format )
         {
-            if( ( i_ret = Android_Legacy_ParseFamily( p_filter, p_xml ) ) )
-                break;
+            i_ret = Android_ParseAlias( fs, p_xml );
         }
-        else if( i_type == XML_READER_STARTELEM && !strcasecmp( "alias", p_node ) && b_new_format )
-        {
-            if( ( i_ret = Android_ParseAlias( p_filter, p_xml ) ) )
-                break;
-        }
+        if( i_ret )
+            break;
     }
 
     xml_ReaderDelete( p_xml );
@@ -414,56 +408,39 @@ static int Android_ParseSystemFonts( filter_t *p_filter, const char *psz_path,
     return i_ret;
 }
 
-int Android_Prepare( filter_t *p_filter )
+int Android_Prepare( vlc_font_select_t *fs )
 {
-    if( Android_ParseSystemFonts( p_filter, ANDROID_SYSTEM_FONTS_NOUGAT, true ) != VLC_SUCCESS )
+    if( Android_ParseSystemFonts( fs, ANDROID_SYSTEM_FONTS_NOUGAT, true ) != VLC_SUCCESS )
     {
-        if( Android_ParseSystemFonts( p_filter, ANDROID_SYSTEM_FONTS_LEGACY, false ) == VLC_ENOMEM )
+        if( Android_ParseSystemFonts( fs, ANDROID_SYSTEM_FONTS_LEGACY, false ) == VLC_ENOMEM )
             return VLC_ENOMEM;
-        if( Android_ParseSystemFonts( p_filter, ANDROID_FALLBACK_FONTS, false ) == VLC_ENOMEM )
+        if( Android_ParseSystemFonts( fs, ANDROID_FALLBACK_FONTS, false ) == VLC_ENOMEM )
             return VLC_ENOMEM;
-        if( Android_ParseSystemFonts( p_filter, ANDROID_VENDOR_FONTS, false ) == VLC_ENOMEM )
+        if( Android_ParseSystemFonts( fs, ANDROID_VENDOR_FONTS, false ) == VLC_ENOMEM )
             return VLC_ENOMEM;
     }
 
     return VLC_SUCCESS;
 }
 
-const vlc_family_t *Android_GetFamily( filter_t *p_filter, const char *psz_family )
+int Android_GetFamily( vlc_font_select_t *fs, const char *psz_lcname,
+                       const vlc_family_t **pp_result )
 {
-    filter_sys_t *p_sys = p_filter->p_sys;
-    char *psz_lc = ToLower( psz_family );
-    if( unlikely( !psz_lc ) )
-        return NULL;
+    *pp_result = vlc_dictionary_value_for_key( &fs->family_map, psz_lcname );
+    if( *pp_result == kVLCDictionaryNotFound )
+        *pp_result = NULL;
 
-    vlc_family_t *p_family =
-            vlc_dictionary_value_for_key( &p_sys->family_map, psz_lc );
-
-    free( psz_lc );
-
-    if( p_family == kVLCDictionaryNotFound )
-        return NULL;
-
-    return p_family;
+    return VLC_SUCCESS;
 }
 
-vlc_family_t *Android_GetFallbacks( filter_t *p_filter, const char *psz_family,
-                                    uni_char_t codepoint )
+int Android_GetFallbacks( vlc_font_select_t *fs, const char *psz_lcname,
+                          uni_char_t codepoint, vlc_family_t **pp_result )
 {
     VLC_UNUSED( codepoint );
 
-    vlc_family_t *p_fallbacks = NULL;
-    filter_sys_t *p_sys = p_filter->p_sys;
-    char *psz_lc = ToLower( psz_family );
-    if( unlikely( !psz_lc ) )
-        return NULL;
+    *pp_result = vlc_dictionary_value_for_key( &fs->fallback_map, psz_lcname );
+    if( *pp_result == kVLCDictionaryNotFound )
+        *pp_result = NULL;
 
-    p_fallbacks = vlc_dictionary_value_for_key( &p_sys->fallback_map, psz_lc );
-
-    free( psz_lc );
-
-    if( p_fallbacks == kVLCDictionaryNotFound )
-        return NULL;
-
-    return p_fallbacks;
+    return VLC_SUCCESS;
 }

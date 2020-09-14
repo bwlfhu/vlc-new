@@ -32,6 +32,7 @@
 #include <vlc_plugin.h>
 #include <vlc_filter.h>
 #include <vlc_picture.h>
+#include <vlc_codec.h>
 
 #define COBJMACROS
 #include <initguid.h>
@@ -53,9 +54,6 @@ struct filter_level
 typedef struct
 {
     HINSTANCE                      hdecoder_dll;
-    /* keep a reference in case the vout is released first */
-    HINSTANCE                      d3d9_dll;
-    d3d9_device_t                  d3d_dev;
     IDirectXVideoProcessor         *processor;
     IDirect3DSurface9              *hw_surface;
 
@@ -89,7 +87,7 @@ static void FillSample( DXVA2_VideoSample *p_sample,
                         picture_t *p_pic,
                         const RECT *p_area )
 {
-    picture_sys_t *p_sys_src = ActivePictureSys(p_pic);
+    picture_sys_d3d9_t *p_sys_src = ActiveD3D9PictureSys(p_pic);
 
     p_sample->SrcSurface = p_sys_src->surface;
     p_sample->SampleFormat.SampleFormat = DXVA2_SampleProgressiveFrame;
@@ -100,17 +98,56 @@ static void FillSample( DXVA2_VideoSample *p_sample,
     p_sample->PlanarAlpha    = DXVA2_Fixed32OpaqueAlpha();
 }
 
+static picture_t *AllocPicture( filter_t *p_filter )
+{
+    struct d3d9_pic_context *pic_ctx = calloc(1, sizeof(*pic_ctx));
+    if (unlikely(pic_ctx == NULL))
+        return NULL;
+
+    picture_t *pic = picture_NewFromFormat( &p_filter->fmt_out.video );
+    if (unlikely(pic == NULL))
+    {
+        free(pic_ctx);
+        return NULL;
+    }
+
+    d3d9_decoder_device_t *d3d9_decoder = GetD3D9OpaqueContext(p_filter->vctx_out);
+    d3d9_video_context_t *vctx_sys = GetD3D9ContextPrivate( p_filter->vctx_out );
+
+    HRESULT hr = IDirect3DDevice9_CreateOffscreenPlainSurface(d3d9_decoder->d3ddev.dev,
+                                                        p_filter->fmt_out.video.i_width,
+                                                        p_filter->fmt_out.video.i_height,
+                                                        vctx_sys->format,
+                                                        D3DPOOL_DEFAULT,
+                                                        &pic_ctx->picsys.surface,
+                                                        NULL);
+    if (FAILED(hr))
+    {
+        free(pic_ctx);
+        picture_Release(pic);
+        return NULL;
+    }
+    AcquireD3D9PictureSys( &pic_ctx->picsys );
+    IDirect3DSurface9_Release(pic_ctx->picsys.surface);
+    pic_ctx->s = (picture_context_t) {
+        d3d9_pic_context_destroy, d3d9_pic_context_copy,
+        vlc_video_context_Hold(p_filter->vctx_out),
+    };
+    pic->context = &pic_ctx->s;
+    return pic;
+}
+
 static picture_t *Filter(filter_t *p_filter, picture_t *p_pic)
 {
     filter_sys_t *p_sys = p_filter->p_sys;
 
-    picture_sys_t *p_src_sys = ActivePictureSys(p_pic);
+    picture_sys_d3d9_t *p_src_sys = ActiveD3D9PictureSys(p_pic);
 
-    picture_t *p_outpic = filter_NewPicture( p_filter );
+    picture_t *p_outpic = AllocPicture( p_filter );
     if( !p_outpic )
         goto failed;
 
-    picture_sys_t *p_out_sys = p_outpic->p_sys;
+    picture_sys_d3d9_t *p_out_sys = ActiveD3D9PictureSys(p_outpic);
     if( !p_out_sys || !p_out_sys->surface )
         goto failed;
 
@@ -146,12 +183,14 @@ static picture_t *Filter(filter_t *p_filter, picture_t *p_pic)
     params.DestFormat.SampleFormat = DXVA2_SampleProgressiveFrame;
     params.BackgroundColor.Alpha = 0xFFFF;
 
+    d3d9_decoder_device_t *d3d9_decoder = GetD3D9OpaqueContext(p_filter->vctx_out);
+
     hr = IDirectXVideoProcessor_VideoProcessBlt( p_sys->processor,
                                                  p_sys->hw_surface,
                                                  &params,
                                                  &sample,
                                                  1, NULL );
-    hr = IDirect3DDevice9_StretchRect( p_sys->d3d_dev.dev,
+    hr = IDirect3DDevice9_StretchRect( d3d9_decoder->d3ddev.dev,
                                        p_sys->hw_surface, NULL,
                                        p_out_sys->surface, NULL,
                                        D3DTEXF_NONE);
@@ -225,7 +264,6 @@ static int D3D9OpenAdjust(vlc_object_t *obj)
     filter_t *filter = (filter_t *)obj;
     filter_sys_t *sys = NULL;
     HINSTANCE hdecoder_dll = NULL;
-    HINSTANCE d3d9_dll = NULL;
     HRESULT hr;
     GUID *processorGUIDs = NULL;
     GUID *processorGUID = NULL;
@@ -234,6 +272,8 @@ static int D3D9OpenAdjust(vlc_object_t *obj)
     if (filter->fmt_in.video.i_chroma != VLC_CODEC_D3D9_OPAQUE
      && filter->fmt_in.video.i_chroma != VLC_CODEC_D3D9_OPAQUE_10B)
         return VLC_EGENERIC;
+    if ( GetD3D9ContextPrivate(filter->vctx_in) == NULL )
+        return VLC_EGENERIC;
     if (!video_format_IsSimilar(&filter->fmt_in.video, &filter->fmt_out.video))
         return VLC_EGENERIC;
 
@@ -241,21 +281,12 @@ static int D3D9OpenAdjust(vlc_object_t *obj)
     if (unlikely(sys == NULL))
         return VLC_ENOMEM;
 
-    d3d9_dll = LoadLibrary(TEXT("D3D9.DLL"));
-    if (!d3d9_dll)
-        goto error;
-
     hdecoder_dll = LoadLibrary(TEXT("DXVA2.DLL"));
     if (!hdecoder_dll)
         goto error;
 
-    D3DSURFACE_DESC dstDesc;
-    D3D9_FilterHoldInstance(filter, &sys->d3d_dev, &dstDesc);
-    if (!sys->d3d_dev.dev)
-    {
-        msg_Dbg(filter, "Filter without a context");
-        goto error;
-    }
+    d3d9_video_context_t *vtcx_sys = GetD3D9ContextPrivate( filter->vctx_in );
+    D3DFORMAT format = vtcx_sys->format;
 
     HRESULT (WINAPI *CreateVideoService)(IDirect3DDevice9 *,
                                          REFIID riid,
@@ -268,7 +299,8 @@ static int D3D9OpenAdjust(vlc_object_t *obj)
         goto error;
     }
 
-    hr = CreateVideoService( sys->d3d_dev.dev, &IID_IDirectXVideoProcessorService,
+    d3d9_decoder_device_t *d3d9_decoder = GetD3D9OpaqueContext(filter->vctx_in);
+    hr = CreateVideoService( d3d9_decoder->d3ddev.dev, &IID_IDirectXVideoProcessorService,
                             (void**)&processor);
     if (FAILED(hr))
     {
@@ -278,9 +310,9 @@ static int D3D9OpenAdjust(vlc_object_t *obj)
 
     DXVA2_VideoDesc dsc;
     ZeroMemory(&dsc, sizeof(dsc));
-    dsc.SampleWidth     = dstDesc.Width;
-    dsc.SampleHeight    = dstDesc.Height;
-    dsc.Format          = dstDesc.Format;
+    dsc.SampleWidth     = filter->fmt_in.video.i_width;
+    dsc.SampleHeight    = filter->fmt_in.video.i_height;
+    dsc.Format          = format;
     if (filter->fmt_in.video.i_frame_rate && filter->fmt_in.video.i_frame_rate_base) {
         dsc.InputSampleFreq.Numerator   = filter->fmt_in.video.i_frame_rate;
         dsc.InputSampleFreq.Denominator = filter->fmt_in.video.i_frame_rate_base;
@@ -333,7 +365,7 @@ static int D3D9OpenAdjust(vlc_object_t *obj)
     }
 
     hr = IDirectXVideoProcessorService_GetProcAmpRange( processor, processorGUID, &dsc,
-                                                        dstDesc.Format, DXVA2_ProcAmp_Brightness,
+                                                        format, DXVA2_ProcAmp_Brightness,
                                                         &sys->Brightness.Range );
     if (FAILED(hr))
     {
@@ -342,7 +374,7 @@ static int D3D9OpenAdjust(vlc_object_t *obj)
     }
 
     hr = IDirectXVideoProcessorService_GetProcAmpRange( processor, processorGUID, &dsc,
-                                                        dstDesc.Format, DXVA2_ProcAmp_Contrast,
+                                                        format, DXVA2_ProcAmp_Contrast,
                                                         &sys->Contrast.Range );
     if (FAILED(hr))
     {
@@ -351,7 +383,7 @@ static int D3D9OpenAdjust(vlc_object_t *obj)
     }
 
     hr = IDirectXVideoProcessorService_GetProcAmpRange( processor, processorGUID, &dsc,
-                                                        dstDesc.Format, DXVA2_ProcAmp_Hue,
+                                                        format, DXVA2_ProcAmp_Hue,
                                                         &sys->Hue.Range );
     if (FAILED(hr))
     {
@@ -360,7 +392,7 @@ static int D3D9OpenAdjust(vlc_object_t *obj)
     }
 
     hr = IDirectXVideoProcessorService_GetProcAmpRange( processor, processorGUID, &dsc,
-                                                        dstDesc.Format, DXVA2_ProcAmp_Saturation,
+                                                        format, DXVA2_ProcAmp_Saturation,
                                                         &sys->Saturation.Range );
     if (FAILED(hr))
     {
@@ -398,10 +430,10 @@ static int D3D9OpenAdjust(vlc_object_t *obj)
     }
 
     hr = IDirectXVideoProcessorService_CreateSurface( processor,
-                                                      dstDesc.Width,
-                                                      dstDesc.Height,
+                                                      filter->fmt_out.video.i_width,
+                                                      filter->fmt_out.video.i_height,
                                                       0,
-                                                      dstDesc.Format,
+                                                      format,
                                                       D3DPOOL_DEFAULT,
                                                       0,
                                                       DXVA2_VideoProcessorRenderTarget,
@@ -417,10 +449,10 @@ static int D3D9OpenAdjust(vlc_object_t *obj)
     IDirectXVideoProcessorService_Release(processor);
 
     sys->hdecoder_dll = hdecoder_dll;
-    sys->d3d9_dll     = d3d9_dll;
 
     filter->pf_video_filter = Filter;
     filter->p_sys = sys;
+    filter->vctx_out = vlc_video_context_Hold(filter->vctx_in);
 
     return VLC_SUCCESS;
 error:
@@ -429,12 +461,8 @@ error:
         IDirectXVideoProcessor_Release( sys->processor );
     if (processor)
         IDirectXVideoProcessorService_Release(processor);
-    if (sys)
-        D3D9_FilterReleaseInstance( &sys->d3d_dev );
     if (hdecoder_dll)
         FreeLibrary(hdecoder_dll);
-    if (d3d9_dll)
-        FreeLibrary(d3d9_dll);
     free(sys);
 
     return VLC_EGENERIC;
@@ -447,9 +475,8 @@ static void D3D9CloseAdjust(vlc_object_t *obj)
 
     IDirect3DSurface9_Release( sys->hw_surface );
     IDirectXVideoProcessor_Release( sys->processor );
-    D3D9_FilterReleaseInstance( &sys->d3d_dev );
     FreeLibrary( sys->hdecoder_dll );
-    FreeLibrary( sys->d3d9_dll );
+    vlc_video_context_Release(filter->vctx_out);
 
     free(sys);
 }
@@ -493,4 +520,9 @@ vlc_module_begin()
     add_submodule()
     set_callbacks( D3D9OpenCPUConverter, D3D9CloseCPUConverter )
     set_capability( "video converter", 10 )
+
+    add_submodule()
+    set_description(N_("Direct3D9"))
+    set_callback_dec_device( D3D9OpenDecoderDevice, 10 )
+    add_shortcut ("dxva2")
 vlc_module_end()

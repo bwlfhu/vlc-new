@@ -18,6 +18,7 @@ misc_LTLIBRARIES += libexport_plugin.la
 libfingerprinter_plugin_la_SOURCES =  \
 	misc/webservices/acoustid.c misc/webservices/acoustid.h \
 	misc/webservices/json.c misc/webservices/json.h \
+        misc/webservices/json_helper.h \
 	misc/fingerprinter.c
 libfingerprinter_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -I$(srcdir)/misc
 libfingerprinter_plugin_la_LIBADD = $(LIBM)
@@ -45,9 +46,17 @@ libsecuretransport_plugin_la_LDFLAGS += -Wl,-U,_SSLCopyALPNProtocols,-U,_SSLSetA
 misc_LTLIBRARIES += libsecuretransport_plugin.la
 endif
 
+if HAVE_OSX
+libiokit_inhibit_plugin_la_SOURCES = misc/inhibit/iokit-inhibit.c
+libiokit_inhibit_plugin_la_LDFLAGS = $(AM_LDFLAGS) -Wl,-framework,CoreFoundation,-framework,IOKit
+misc_LTLIBRARIES += libiokit_inhibit_plugin.la
+endif
+
 libxdg_screensaver_plugin_la_SOURCES = misc/inhibit/xdg.c
 if HAVE_XCB
+if !HAVE_WIN32
 misc_LTLIBRARIES += libxdg_screensaver_plugin.la
+endif
 endif
 
 libdbus_screensaver_plugin_la_SOURCES = misc/inhibit/dbus.c
@@ -61,6 +70,7 @@ libwl_idle_inhibit_plugin_la_SOURCES = misc/inhibit/wl-idle-inhibit.c
 nodist_libwl_idle_inhibit_plugin_la_SOURCES = \
 	misc/inhibit/idle-inhibit-client-protocol.h \
 	misc/inhibit/idle-inhibit-protocol.c
+libwl_idle_inhibit_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -I$(builddir)/misc/inhibit
 libwl_idle_inhibit_plugin_la_CFLAGS = $(WAYLAND_CLIENT_CFLAGS)
 libwl_idle_inhibit_plugin_la_LIBADD = $(WAYLAND_CLIENT_LIBS)
 if HAVE_WAYLAND
@@ -88,15 +98,35 @@ misc_LTLIBRARIES += \
 	libaddonsfsstorage_plugin.la
 endif
 
-libvod_rtsp_plugin_la_SOURCES = misc/rtsp.c
-libvod_rtsp_plugin_la_LIBADD = $(SOCKET_LIBS)
-if ENABLE_SOUT
-misc_LTLIBRARIES += libvod_rtsp_plugin.la
-endif
-
 libxml_plugin_la_SOURCES = misc/xml/libxml.c
 libxml_plugin_la_CFLAGS = $(AM_CFLAGS) $(LIBXML2_CFLAGS)
 libxml_plugin_la_LIBADD = $(LIBXML2_LIBS)
 libxml_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(miscdir)' $(LDFLAGS_xml)
 EXTRA_LTLIBRARIES += libxml_plugin.la
 misc_LTLIBRARIES += $(LTLIBxml)
+
+libmedialibrary_plugin_la_SOURCES = \
+	misc/medialibrary/medialib.cpp \
+	misc/medialibrary/MetadataExtractor.cpp \
+	misc/medialibrary/entities.cpp \
+	misc/medialibrary/Thumbnailer.cpp \
+	misc/medialibrary/medialibrary.h \
+	misc/medialibrary/fs/device.h \
+	misc/medialibrary/fs/device.cpp \
+	misc/medialibrary/fs/directory.h \
+	misc/medialibrary/fs/directory.cpp \
+	misc/medialibrary/fs/file.h \
+	misc/medialibrary/fs/file.cpp \
+	misc/medialibrary/fs/fs.h \
+	misc/medialibrary/fs/fs.cpp \
+	misc/medialibrary/fs/devicelister.cpp \
+	misc/medialibrary/fs/devicelister.h \
+	misc/medialibrary/fs/util.h \
+	misc/medialibrary/fs/util.cpp
+
+libmedialibrary_plugin_la_CXXFLAGS = $(AM_CXXFLAGS) $(MEDIALIBRARY_CFLAGS)
+libmedialibrary_plugin_la_LIBADD = $(MEDIALIBRARY_LIBS)
+libmedialibrary_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(miscdir)'
+EXTRA_LTLIBRARIES += libmedialibrary_plugin.la
+misc_LTLIBRARIES += $(LTLIBmedialibrary)
+

@@ -41,6 +41,8 @@ pluginsinclude_HEADERS = \
 	../include/vlc_config_cat.h \
 	../include/vlc_configuration.h \
 	../include/vlc_cpu.h \
+	../include/vlc_cxx_helpers.hpp \
+	../include/vlc_decoder.h \
 	../include/vlc_dialog.h \
 	../include/vlc_demux.h \
 	../include/vlc_epg.h \
@@ -52,6 +54,7 @@ pluginsinclude_HEADERS = \
 	../include/vlc_fs.h \
 	../include/vlc_gcrypt.h \
 	../include/vlc_opengl.h \
+	../include/vlc_hash.h \
 	../include/vlc_http.h \
 	../include/vlc_httpd.h \
 	../include/vlc_image.h \
@@ -61,7 +64,7 @@ pluginsinclude_HEADERS = \
 	../include/vlc_interface.h \
 	../include/vlc_keystore.h \
 	../include/vlc_list.h \
-	../include/vlc_md5.h \
+	../include/vlc_media_source.h \
 	../include/vlc_messages.h \
 	../include/vlc_meta.h \
 	../include/vlc_meta_fetcher.h \
@@ -75,14 +78,18 @@ pluginsinclude_HEADERS = \
 	../include/vlc_picture.h \
 	../include/vlc_picture_fifo.h \
 	../include/vlc_picture_pool.h \
+	../include/vlc_player.h \
 	../include/vlc_playlist.h \
+	../include/vlc_playlist_export.h \
 	../include/vlc_plugin.h \
 	../include/vlc_probe.h \
+	../include/vlc_queue.h \
 	../include/vlc_rand.h \
 	../include/vlc_services_discovery.h \
 	../include/vlc_fingerprinter.h \
 	../include/vlc_interrupt.h \
 	../include/vlc_renderer_discovery.h \
+	../include/vlc_sort.h \
 	../include/vlc_sout.h \
 	../include/vlc_spu.h \
 	../include/vlc_stream.h \
@@ -93,9 +100,11 @@ pluginsinclude_HEADERS = \
 	../include/vlc_threads.h \
 	../include/vlc_tick.h \
 	../include/vlc_timestamp_helper.h \
+	../include/vlc_thumbnailer.h \
 	../include/vlc_tls.h \
 	../include/vlc_url.h \
 	../include/vlc_variables.h \
+	../include/vlc_vector.h \
 	../include/vlc_viewpoint.h \
 	../include/vlc_vlm.h \
 	../include/vlc_video_splitter.h \
@@ -116,8 +125,6 @@ noinst_HEADERS = \
 	../include/vlc_iso_lang.h \
 	../include/vlc_pgpkey.h \
 	../include/vlc_update.h \
-	../include/vlc_vod.h \
-	../include/vlc_vout_wrapper.h \
 	$(NULL)
 
 ../include/vlc_about.h: Makefile.am $(top_srcdir)/COPYING $(top_srcdir)/THANKS $(top_srcdir)/AUTHORS
@@ -203,6 +210,10 @@ libvlccore_la_SOURCES = \
 	config/getopt.c \
 	config/vlc_getopt.h \
 	extras/libc.c \
+	media_source/media_source.c \
+	media_source/media_source.h \
+	media_source/media_tree.c \
+	media_source/media_tree.h \
 	modules/modules.h \
 	modules/modules.c \
 	modules/bank.c \
@@ -211,18 +222,26 @@ libvlccore_la_SOURCES = \
 	modules/textdomain.c \
 	interface/dialog.c \
 	interface/interface.c \
-	playlist/playlist_internal.h \
-	playlist/aout.c \
-	playlist/thread.c \
+	playlist/content.c \
+	playlist/content.h \
 	playlist/control.c \
-	playlist/engine.c \
-	playlist/sort.c \
-	playlist/loadsave.c \
-	playlist/tree.c \
+	playlist/control.h \
+	playlist/export.c \
 	playlist/item.c \
-	playlist/search.c \
-	playlist/services_discovery.c \
-	playlist/renderer.c \
+	playlist/item.h \
+	playlist/notify.c \
+	playlist/notify.h \
+	playlist/player.c \
+	playlist/player.h \
+	playlist/playlist.c \
+	playlist/playlist.h \
+	playlist/preparse.c \
+	playlist/preparse.h \
+	playlist/randomizer.c \
+	playlist/randomizer.h \
+	playlist/request.c \
+	playlist/shuffle.c \
+	playlist/sort.c \
 	preparser/art.c \
 	preparser/art.h \
 	preparser/fetcher.c \
@@ -233,22 +252,34 @@ libvlccore_la_SOURCES = \
 	input/access.c \
 	clock/clock_internal.c \
 	clock/input_clock.c \
-	input/control.c \
+	clock/clock.c \
 	input/decoder.c \
+	input/decoder_helpers.c \
 	input/demux.c \
 	input/demux_chained.c \
 	input/es_out.c \
+	input/es_out_source.c \
 	input/es_out_timeshift.c \
-	input/event.c \
 	input/input.c \
 	input/info.h \
 	input/meta.c \
+	player/player.c \
+	player/player.h \
+	player/input.c \
+	player/timer.c \
+	player/track.c \
+	player/title.c \
+	player/aout.c \
+	player/vout.c \
+	player/osd.c \
+	player/medialib.c \
+	player/metadata.c \
 	clock/input_clock.h \
+	clock/clock.h \
 	clock/clock_internal.h \
 	input/decoder.h \
 	input/demux.h \
 	input/es_out.h \
-	input/es_out_timeshift.h \
 	input/event.h \
 	input/item.h \
 	input/mrl_helpers.h \
@@ -267,11 +298,13 @@ libvlccore_la_SOURCES = \
 	input/stream_filter.c \
 	input/stream_memory.c \
 	input/subtitles.c \
+	input/thumbnailer.c \
 	input/var.c \
 	audio_output/aout_internal.h \
 	audio_output/common.c \
 	audio_output/dec.c \
 	audio_output/filters.c \
+	audio_output/meter.c \
 	audio_output/output.c \
 	audio_output/volume.c \
 	video_output/chrono.h \
@@ -282,7 +315,6 @@ libvlccore_la_SOURCES = \
 	video_output/inhibit.c \
 	video_output/inhibit.h \
 	video_output/interlacing.c \
-	video_output/interlacing.h \
 	video_output/snapshot.c \
 	video_output/snapshot.h \
 	video_output/statistic.h \
@@ -292,11 +324,13 @@ libvlccore_la_SOURCES = \
 	video_output/video_widgets.c \
 	video_output/vout_subpictures.c \
 	video_output/vout_spuregion_helper.h \
+	video_output/vout_wrapper.h \
 	video_output/window.c \
 	video_output/window.h \
 	video_output/opengl.c \
 	video_output/vout_intf.c \
 	video_output/vout_internal.h \
+	video_output/vout_private.h \
 	video_output/vout_wrapper.c \
 	network/getaddrinfo.c \
 	network/http_auth.c \
@@ -345,9 +379,9 @@ libvlccore_la_SOURCES = \
 	misc/mime.c \
 	misc/objects.c \
 	misc/objres.c \
+	misc/queue.c \
 	misc/variables.h \
 	misc/variables.c \
-	misc/error.c \
 	misc/xml.c \
 	misc/addons.c \
 	misc/filter.c \
@@ -355,16 +389,18 @@ libvlccore_la_SOURCES = \
 	misc/httpcookies.c \
 	misc/fingerprinter.c \
 	misc/text_style.c \
+	misc/sort.c \
 	misc/subpicture.c \
-	misc/subpicture.h
+	misc/subpicture.h \
+	misc/medialibrary.c \
+	misc/viewpoint.c
 libvlccore_la_LIBADD = $(LIBS_libvlccore) \
 	../compat/libcompat.la \
 	$(LTLIBINTL) $(LTLIBICONV) \
-	$(IDN_LIBS) $(SOCKET_LIBS) $(LIBRT) $(LIBDL) $(LIBM)
+	$(IDN_LIBS) $(SOCKET_LIBS) $(ATOMIC_LIB) $(LIBRT) $(LIBDL) $(LIBM)
 
 if HAVE_WIN32
 libvlccore_la_SOURCES += \
-	win32/dirs.c \
 	win32/error.c \
 	win32/filesystem.c \
 	win32/netconf.c \
@@ -374,11 +410,12 @@ libvlccore_la_SOURCES += \
 	win32/thread.c \
 	win32/winsock.c
 if HAVE_WINSTORE
-libvlccore_la_SOURCES += posix/timer.c
+libvlccore_la_SOURCES += posix/timer.c win32/dirs-uap.c
 else
-libvlccore_la_SOURCES += win32/timer.c
+libvlccore_la_SOURCES += win32/timer.c win32/dirs.c
 endif
-else
+endif
+
 if HAVE_OS2
 libvlccore_la_SOURCES += \
 	os2/dirs.c \
@@ -390,7 +427,8 @@ libvlccore_la_SOURCES += \
 	os2/specific.c \
 	os2/rand.c \
 	os2/thread.c
-else
+endif
+
 if HAVE_NACL
 libvlccore_la_SOURCES += \
 	android/error.c \
@@ -400,42 +438,61 @@ libvlccore_la_SOURCES += \
 	posix/rand.c \
 	posix/specific.c \
 	posix/timer.c
+endif
+
+if HAVE_DARWIN
+libvlccore_la_SOURCES += \
+	darwin/error.c \
+	darwin/specific.c
+libvlccore_objc_la_SOURCES = \
+	darwin/dirs.m \
+	darwin/netconf.m
+noinst_LTLIBRARIES = libvlccore_objc.la
+endif
+
+if HAVE_FREEBSD
+libvlccore_la_SOURCES += \
+	freebsd/thread.c
+endif
+
+if HAVE_LINUX
+libvlccore_la_SOURCES += \
+	linux/cpu.c \
+	linux/dirs.c \
+	linux/thread.c
+if !HAVE_ANDROID
+libvlccore_la_SOURCES += \
+	linux/filesystem.c
 else
+libvlccore_la_SOURCES += \
+	android/error.c \
+	android/specific.c \
+	android/thread.c
+endif
+endif
+
+if !HAVE_WIN32
+if !HAVE_OS2
+if !HAVE_NACL
 libvlccore_la_SOURCES += \
 	posix/filesystem.c \
 	posix/plugin.c \
 	posix/rand.c \
 	posix/timer.c
-if HAVE_ANDROID
+if !HAVE_LINUX
+libvlccore_la_SOURCES += posix/wait.c
+endif
+if !HAVE_ANDROID
 libvlccore_la_SOURCES += \
-	android/error.c \
-	android/specific.c \
-	android/thread.c \
-	linux/cpu.c \
-	linux/dirs.c \
-	linux/thread.c
-else
-if HAVE_DARWIN
-libvlccore_la_SOURCES += \
-	darwin/dirs.c \
-	darwin/error.c \
-	darwin/netconf.c \
-	darwin/specific.c \
-	darwin/thread.c
-else
+	posix/sort.c \
+	posix/thread.c
+if !HAVE_DARWIN
 libvlccore_la_SOURCES += \
 	posix/dirs.c \
 	posix/error.c \
 	posix/netconf.c \
-	posix/specific.c \
-	posix/thread.c
-if HAVE_LINUX
-libvlccore_la_SOURCES += \
-	linux/cpu.c \
-	linux/dirs.c \
-	linux/filesystem.c \
-	linux/thread.c
-endif
+	posix/picture.c \
+	posix/specific.c
 if HAVE_LIBANL
 libvlccore_la_SOURCES += \
 	linux/getaddrinfo.c
@@ -452,7 +509,7 @@ endif
 
 if ENABLE_SOUT
 libvlccore_la_SOURCES += \
-	stream_output/sap.c stream_output/sdp.c \
+	stream_output/sap.c \
 	stream_output/stream_output.c stream_output/stream_output.h
 if ENABLE_VLM
 libvlccore_la_SOURCES += input/vlm.c input/vlm_event.c input/vlmshell.c
@@ -485,7 +542,11 @@ if HAVE_DBUS
 libvlccore_la_LIBADD += $(DBUS_LIBS)
 endif
 if HAVE_DARWIN
-libvlccore_la_LDFLAGS += -Xlinker -install_name -Xlinker @rpath/libvlccore.dylib
+$(libvlccore_la_OBJECTS): libvlccore_objc.la
+libvlccore_objc_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-arc
+libvlccore_objc_la_LDFLAGS = -static
+libvlccore_la_LIBADD += libvlccore_objc.la
+libvlccore_la_LDFLAGS +=  -Wl,-framework,Foundation -Xlinker -install_name -Xlinker @rpath/libvlccore.dylib -Wl,-U,_vlc_static_modules
 endif
 
 libvlc_win32_rc.$(OBJEXT): libvlc_win32_rc.rc $(top_srcdir)/extras/package/win32/libvlc.dll.manifest
@@ -521,7 +582,15 @@ check_PROGRAMS = \
 	test_utf8 \
 	test_xmlent \
 	test_headers \
-	test_mrl_helpers
+	test_mrl_helpers \
+	test_arrays \
+	test_vector \
+	test_shared_data_ptr \
+	test_playlist \
+	test_randomizer \
+	test_media_source \
+	test_extensions \
+	test_thread
 
 TESTS = $(check_PROGRAMS) check_symbols
 
@@ -543,6 +612,31 @@ test_utf8_SOURCES = test/utf8.c
 test_xmlent_SOURCES = test/xmlent.c
 test_headers_SOURCES = test/headers.c
 test_mrl_helpers_SOURCES = test/mrl_helpers.c
+test_arrays_SOURCES = test/arrays.c
+test_vector_SOURCES = test/vector.c
+test_shared_data_ptr_SOURCES = test/shared_data_ptr.cpp
+test_extensions_SOURCES = test/extensions.c
+test_playlist_SOURCES = playlist/test.c \
+	playlist/content.c \
+	playlist/control.c \
+	playlist/item.c \
+	playlist/notify.c \
+	playlist/player.c \
+	playlist/playlist.c \
+	playlist/preparse.c \
+	playlist/randomizer.c \
+	playlist/request.c \
+	playlist/shuffle.c \
+	playlist/sort.c
+test_playlist_CFLAGS = -DTEST_PLAYLIST
+test_randomizer_SOURCES = playlist/randomizer.c
+test_randomizer_CFLAGS = -DTEST_RANDOMIZER
+test_media_source_LDADD = $(LDADD) $(LIBS_libvlccore)
+test_media_source_CFLAGS = -DTEST_MEDIA_SOURCE
+test_media_source_SOURCES = media_source/test.c \
+	media_source/media_source.c \
+	media_source/media_tree.c
+test_thread_SOURCES = test/thread.c
 
 AM_LDFLAGS = -no-install
 LDADD = libvlccore.la \
@@ -567,7 +661,7 @@ $(srcdir)/revision.txt:
 stamp-revision:
 	$(AM_V_at)rm -f -- revision.tmp
 	$(AM_V_GEN)if ! git \
-			--git-dir="$(top_srcdir)/.git/" describe \
+			-C "$(top_srcdir)" describe \
 			--tags --long --match '?.*.*' --always; then \
 		cat $(srcdir)/revision.txt ; \
 	fi > revision.tmp

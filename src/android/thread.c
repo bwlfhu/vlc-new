@@ -34,6 +34,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <stdatomic.h>
+#include <stdnoreturn.h>
 #include <time.h>
 #include <assert.h>
 
@@ -49,22 +50,7 @@ static void
 vlc_thread_fatal_print (const char *action, int error,
                         const char *function, const char *file, unsigned line)
 {
-    char buf[1000];
-    const char *msg;
-
-    switch (strerror_r (error, buf, sizeof (buf)))
-    {
-        case 0:
-            msg = buf;
-            break;
-        case ERANGE: /* should never happen */
-            msg = "unknown (too big to display)";
-            break;
-        default:
-            msg = "unknown (invalid error number)";
-            break;
-    }
-
+    const char *msg = vlc_strerror_c(error);
     fprintf(stderr, "LibVLC fatal error %s (%d) in thread %lu "
             "at %s:%u in %s\n Error message: %s\n",
             action, error, vlc_thread_id (), file, line, function, msg);
@@ -81,83 +67,16 @@ vlc_thread_fatal_print (const char *action, int error,
 # define VLC_THREAD_ASSERT( action ) ((void)val)
 #endif
 
-/* mutexes */
-void vlc_mutex_init( vlc_mutex_t *p_mutex )
-{
-    pthread_mutexattr_t attr;
-
-    pthread_mutexattr_init (&attr);
-#ifdef NDEBUG
-    pthread_mutexattr_settype (&attr, PTHREAD_MUTEX_DEFAULT);
-#else
-    pthread_mutexattr_settype (&attr, PTHREAD_MUTEX_ERRORCHECK);
-#endif
-    pthread_mutex_init (p_mutex, &attr);
-    pthread_mutexattr_destroy( &attr );
-}
-
-void vlc_mutex_init_recursive( vlc_mutex_t *p_mutex )
-{
-    pthread_mutexattr_t attr;
-
-    pthread_mutexattr_init (&attr);
-    pthread_mutexattr_settype (&attr, PTHREAD_MUTEX_RECURSIVE);
-    pthread_mutex_init (p_mutex, &attr);
-    pthread_mutexattr_destroy( &attr );
-}
-
-
-void vlc_mutex_destroy (vlc_mutex_t *p_mutex)
-{
-    int val = pthread_mutex_destroy( p_mutex );
-    VLC_THREAD_ASSERT ("destroying mutex");
-}
-
-#ifndef NDEBUG
-void vlc_assert_locked (vlc_mutex_t *p_mutex)
-{
-    assert (pthread_mutex_lock (p_mutex) == EDEADLK);
-}
-#endif
-
-void vlc_mutex_lock (vlc_mutex_t *p_mutex)
-{
-    int val = pthread_mutex_lock( p_mutex );
-    VLC_THREAD_ASSERT ("locking mutex");
-}
-
-int vlc_mutex_trylock (vlc_mutex_t *p_mutex)
-{
-    int val = pthread_mutex_trylock( p_mutex );
-
-    if (val != EBUSY)
-        VLC_THREAD_ASSERT ("locking mutex");
-    return val;
-}
-
-void vlc_mutex_unlock (vlc_mutex_t *p_mutex)
-{
-    int val = pthread_mutex_unlock( p_mutex );
-    VLC_THREAD_ASSERT ("unlocking mutex");
-}
-
-void vlc_once(vlc_once_t *once, void (*cb)(void))
-{
-    int val = pthread_once(once, cb);
-    VLC_THREAD_ASSERT("initializing once");
-}
-
 struct vlc_thread
 {
     pthread_t      thread;
-    vlc_sem_t      finished;
 
     void *(*entry)(void*);
     void *data;
 
     struct
     {
-        void *addr; /// Non-null if waiting on futex
+        atomic_uint *addr; /// Non-null if waiting on futex
         vlc_mutex_t lock ; /// Protects futex address
     } wait;
 
@@ -166,11 +85,6 @@ struct vlc_thread
 };
 
 static thread_local struct vlc_thread *thread = NULL;
-
-vlc_thread_t vlc_thread_self (void)
-{
-    return thread;
-}
 
 void vlc_threads_setup (libvlc_int_t *p_libvlc)
 {
@@ -183,7 +97,6 @@ static void clean_detached_thread(void *data)
     struct vlc_thread *th = data;
 
     /* release thread handle */
-    vlc_mutex_destroy(&th->wait.lock);
     free(th);
 }
 
@@ -200,25 +113,12 @@ static void *detached_thread(void *data)
     return NULL;
 }
 
-static void finish_joinable_thread(void *data)
-{
-    vlc_thread_t th = data;
-
-    vlc_sem_post(&th->finished);
-}
-
 static void *joinable_thread(void *data)
 {
     vlc_thread_t th = data;
-    void *ret;
 
-    vlc_cleanup_push(finish_joinable_thread, th);
     thread = th;
-    ret = th->entry(th->data);
-    vlc_cleanup_pop();
-    vlc_sem_post(&th->finished);
-
-    return ret;
+    return th->entry(th->data);
 }
 
 static int vlc_clone_attr (vlc_thread_t *th, void *(*entry) (void *),
@@ -243,8 +143,6 @@ static int vlc_clone_attr (vlc_thread_t *th, void *(*entry) (void *),
         pthread_sigmask (SIG_BLOCK, &set, &oldset);
     }
 
-    if (!detach)
-        vlc_sem_init(&thread->finished, 0);
     atomic_store(&thread->killed, false);
     thread->killable = true;
     thread->entry = entry;
@@ -275,9 +173,6 @@ int vlc_clone (vlc_thread_t *th, void *(*entry) (void *), void *data,
 
 void vlc_join (vlc_thread_t handle, void **result)
 {
-    vlc_sem_wait (&handle->finished);
-    vlc_sem_destroy (&handle->finished);
-
     int val = pthread_join (handle->thread, result);
     VLC_THREAD_ASSERT ("joining thread");
     clean_detached_thread(handle);
@@ -302,7 +197,7 @@ int vlc_set_priority (vlc_thread_t th, int priority)
 
 void vlc_cancel (vlc_thread_t thread_id)
 {
-    atomic_int *addr;
+    atomic_uint *addr;
 
     atomic_store(&thread_id->killed, true);
 
@@ -311,7 +206,7 @@ void vlc_cancel (vlc_thread_t thread_id)
     if (addr != NULL)
     {
         atomic_fetch_or_explicit(addr, 1, memory_order_relaxed);
-        vlc_addr_broadcast(addr);
+        vlc_atomic_notify_all(addr);
     }
     vlc_mutex_unlock(&thread_id->wait.lock);
 }
@@ -346,44 +241,29 @@ void vlc_testcancel (void)
     pthread_exit(NULL);
 }
 
-void vlc_control_cancel(int cmd, ...)
+void vlc_cancel_addr_set(atomic_uint *addr)
 {
-    vlc_thread_t th = vlc_thread_self();
-    va_list ap;
-
+    vlc_thread_t th = thread;
     if (th == NULL)
         return;
 
-    va_start(ap, cmd);
-    switch (cmd)
-    {
-        case VLC_CANCEL_ADDR_SET:
-        {
-            void *addr = va_arg(ap, void *);
+    vlc_mutex_lock(&th->wait.lock);
+    assert(th->wait.addr == NULL);
+    th->wait.addr = addr;
+    vlc_mutex_unlock(&th->wait.lock);
+}
 
-            vlc_mutex_lock(&th->wait.lock);
-            assert(th->wait.addr == NULL);
-            th->wait.addr = addr;
-            vlc_mutex_unlock(&th->wait.lock);
-            break;
-        }
+void vlc_cancel_addr_clear(atomic_uint *addr)
+{
+    vlc_thread_t th = thread;
+    if (th == NULL)
+        return;
 
-        case VLC_CANCEL_ADDR_CLEAR:
-        {
-            void *addr = va_arg(ap, void *);
-
-            vlc_mutex_lock(&th->wait.lock);
-            assert(th->wait.addr == addr);
-            th->wait.addr = NULL;
-            (void) addr;
-            vlc_mutex_unlock(&th->wait.lock);
-            break;
-        }
-
-        default:
-            vlc_assert_unreachable ();
-    }
-    va_end(ap);
+    vlc_mutex_lock(&th->wait.lock);
+    assert(th->wait.addr == addr);
+    th->wait.addr = NULL;
+    (void) addr;
+    vlc_mutex_unlock(&th->wait.lock);
 }
 
 /* threadvar */

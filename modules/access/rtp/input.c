@@ -24,24 +24,26 @@
 # include <config.h>
 #endif
 
-#include <vlc_common.h>
-#include <vlc_demux.h>
-#include <vlc_block.h>
-#include <vlc_network.h>
-
 #include <limits.h>
 #include <errno.h>
-#include <unistd.h>
-#ifdef HAVE_POLL
+#ifdef HAVE_POLL_H
 # include <poll.h>
 #endif
 #ifdef HAVE_SYS_UIO_H
 # include <sys/uio.h>
 #endif
+#ifdef _WIN32
+# include <winsock2.h>
+#endif
+
+#include <vlc_common.h>
+#include <vlc_demux.h>
+#include <vlc_block.h>
+#include <vlc_dtls.h>
 
 #include "rtp.h"
 #ifdef HAVE_SRTP
-# include <srtp.h>
+# include "srtp.h"
 #endif
 
 #define DEFAULT_MRU (1500u - (20 + 8))
@@ -108,23 +110,15 @@ void *rtp_dgram_thread (void *opaque)
     demux_t *demux = opaque;
     demux_sys_t *sys = demux->p_sys;
     vlc_tick_t deadline = VLC_TICK_INVALID;
-    int rtp_fd = sys->fd;
-    struct iovec iov =
-    {
-        .iov_len = DEFAULT_MRU,
-    };
-    struct msghdr msg =
-    {
-        .msg_iov = &iov,
-        .msg_iovlen = 1,
-    };
-
-    struct pollfd ufd[1];
-    ufd[0].fd = rtp_fd;
-    ufd[0].events = POLLIN;
+    struct vlc_dtls *rtp_sock = sys->rtp_sock;
 
     for (;;)
     {
+        struct pollfd ufd[1];
+
+        ufd[0].events = POLLIN;
+        ufd[0].fd = vlc_dtls_GetPollFD(rtp_sock, &ufd[0].events);
+
         int n = poll (ufd, 1, rtp_timeout (deadline));
         if (n == -1)
             continue;
@@ -135,49 +129,34 @@ void *rtp_dgram_thread (void *opaque)
 
         if (ufd[0].revents)
         {
-            n--;
-            if (unlikely(ufd[0].revents & POLLHUP))
-                break; /* RTP socket dead (DCCP only) */
-
-            block_t *block = block_Alloc (iov.iov_len);
+            block_t *block = block_Alloc(DEFAULT_MRU);
             if (unlikely(block == NULL))
-            {
-                if (iov.iov_len == DEFAULT_MRU)
-                    break; /* we are totallly screwed */
-                iov.iov_len = DEFAULT_MRU;
-                continue; /* retry with shrunk MRU */
-            }
+                break; /* we are totallly screwed */
 
-            iov.iov_base = block->p_buffer;
-#ifdef __linux__
-            msg.msg_flags = MSG_TRUNC;
-#else
-            msg.msg_flags = 0;
-#endif
-
-            ssize_t len = recvmsg (rtp_fd, &msg, 0);
-            if (len != -1)
-            {
-#ifdef MSG_TRUNC
-                if (msg.msg_flags & MSG_TRUNC)
-                {
-                    msg_Err(demux, "%zd bytes packet truncated (MRU was %zu)",
-                            len, iov.iov_len);
+            bool truncated;
+            ssize_t len = vlc_dtls_Recv(rtp_sock, block->p_buffer,
+                                       block->i_buffer, &truncated);
+            if (len >= 0) {
+                if (truncated) {
+                    msg_Err(demux, "packet truncated (MRU was %zu)",
+                            block->i_buffer);
                     block->i_flags |= BLOCK_FLAG_CORRUPTED;
-                    iov.iov_len = len;
                 }
                 else
-#endif
                     block->i_buffer = len;
 
                 rtp_process (demux, block);
             }
             else
             {
+                if (errno == EPIPE)
+                    break; /* connection terminated */
                 msg_Warn (demux, "RTP network error: %s",
                           vlc_strerror_c(errno));
                 block_Release (block);
             }
+
+            n--;
         }
 
     dequeue:
@@ -185,49 +164,5 @@ void *rtp_dgram_thread (void *opaque)
             deadline = VLC_TICK_INVALID;
         vlc_restorecancel (canc);
     }
-    return NULL;
-}
-
-/**
- * RTP/RTCP session thread for stream sockets (framed RTP)
- */
-void *rtp_stream_thread (void *opaque)
-{
-#ifndef _WIN32
-    demux_t *demux = opaque;
-    demux_sys_t *sys = demux->p_sys;
-    int fd = sys->fd;
-
-    for (;;)
-    {
-        /* There is no reordering on stream sockets, so no timeout. */
-        ssize_t val;
-
-        uint16_t frame_len;
-        if (recv (fd, &frame_len, 2, MSG_WAITALL) != 2)
-            break;
-
-        block_t *block = block_Alloc (ntohs (frame_len));
-        if (unlikely(block == NULL))
-            break;
-
-        block_cleanup_push (block);
-        val = recv (fd, block->p_buffer, block->i_buffer, MSG_WAITALL);
-        vlc_cleanup_pop ();
-
-        if (val != (ssize_t)block->i_buffer)
-        {
-            block_Release (block);
-            break;
-        }
-
-        int canc = vlc_savecancel ();
-        rtp_process (demux, block);
-        rtp_dequeue_force (demux, sys->session);
-        vlc_restorecancel (canc);
-    }
-#else
-    (void) opaque;
-#endif
     return NULL;
 }

@@ -118,6 +118,9 @@ Attribute Attribute::unescapeQuotes() const
 
 std::string Attribute::quotedString() const
 {
+    if(!value.empty() && value.at(0) != '"')
+        return value;
+
     if(value.length() < 2)
         return "";
 
@@ -277,13 +280,20 @@ ValuesListTag::~ValuesListTag()
 void ValuesListTag::parseAttributes(const std::string &field)
 {
     std::size_t pos = field.find(',');
+    Attribute *attr;
     if(pos != std::string::npos)
     {
-        Attribute *attr = new (std::nothrow) Attribute("DURATION", field.substr(0, pos));
+        attr = new (std::nothrow) Attribute("DURATION", field.substr(0, pos));
         if(attr)
             addAttribute(attr);
 
         attr = new (std::nothrow) Attribute("TITLE", field.substr(pos));
+        if(attr)
+            addAttribute(attr);
+    }
+    else /* broken EXTINF without mandatory comma */
+    {
+        attr = new (std::nothrow) Attribute("DURATION", field);
         if(attr)
             addAttribute(attr);
     }
@@ -308,7 +318,9 @@ Tag * TagFactory::createTagByName(const std::string &name, const std::string &va
         {"EXT-X-PLAYLIST-TYPE",             SingleValueTag::EXTXPLAYLISTTYPE},
         {"EXT-X-I-FRAMES-ONLY",             Tag::EXTXIFRAMESONLY},
         {"EXT-X-MEDIA",                     AttributesTag::EXTXMEDIA},
+        {"EXT-X-START",                     AttributesTag::EXTXSTART},
         {"EXT-X-STREAM-INF",                AttributesTag::EXTXSTREAMINF},
+        {"EXT-X-SESSION-KEY",               AttributesTag::EXTXSESSIONKEY},
         {"EXTINF",                          ValuesListTag::EXTINF},
         {"",                                SingleValueTag::URI},
         {NULL,                              0},
@@ -341,8 +353,10 @@ Tag * TagFactory::createTagByName(const std::string &name, const std::string &va
             return new (std::nothrow) ValuesListTag(exttagmapping[i].i, value);
 
         case AttributesTag::EXTXKEY:
+        case AttributesTag::EXTXSESSIONKEY:
         case AttributesTag::EXTXMAP:
         case AttributesTag::EXTXMEDIA:
+        case AttributesTag::EXTXSTART:
         case AttributesTag::EXTXSTREAMINF:
             return new (std::nothrow) AttributesTag(exttagmapping[i].i, value);
         }

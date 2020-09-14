@@ -52,46 +52,55 @@ typedef struct
 
 static void Win32AddConnection(stream_t *access, const char *server,
                                const char *share, const char *user,
-                               const char *pwd, const char *domain)
+                               const char *pwd)
 {
-    NETRESOURCE net_resource;
-    char remote_name[MAX_PATH];
+    char *remote_name;
 
-    VLC_UNUSED(domain);
+    if (share != NULL)
+    {   /* skip leading and remove trailing slashes */
+        int slen = strcspn(++share, "/");
 
-    memset(&net_resource, 0, sizeof (net_resource));
-    net_resource.dwType = RESOURCETYPE_DISK;
+        if (asprintf(&remote_name, "\\\\%s\\%.*s", server, slen, share) < 0)
+            return;
+    }
+    else
+    {
+        if (asprintf(&remote_name, "\\\\%s\\", server) < 0)
+            return;
+    }
 
-    snprintf(remote_name, sizeof (remote_name), "\\\\%s\\%s", server,
-             (share != NULL) ? share + 1 /* skip leading '/' */: "");
+    NETRESOURCE net_resource = {
+        .dwType = RESOURCETYPE_DISK,
+        .lpRemoteName = ToWide(remote_name),
+    };
 
-    /* remove trailings '/' */
-    char *delim = strchr(remote_name, '/');
-    if (delim != NULL)
-        *delim = '\0';
+    free(remote_name);
 
     const char *msg;
-    net_resource.lpRemoteName = remote_name;
+    wchar_t *wpwd  = pwd  ? ToWide(pwd)  : NULL;
+    wchar_t *wuser = user ? ToWide(user) : NULL;
 
-    switch (WNetAddConnection2(&net_resource, pwd, user, 0))
+    switch (WNetAddConnection2(&net_resource, wpwd, wuser, 0))
     {
         case NO_ERROR:
-            msg = "connected to %s";
+            msg = "connected to %ls";
             break;
         case ERROR_ALREADY_ASSIGNED:
         case ERROR_DEVICE_ALREADY_REMEMBERED:
-            msg = "already connected to %s";
+            msg = "already connected to %ls";
             break;
         default:
-            msg = "failed to connect to %s";
+            msg = "failed to connect to %ls";
     }
-    msg_Dbg(access, msg, remote_name);
+    msg_Dbg(access, msg, net_resource.lpRemoteName);
+    free(net_resource.lpRemoteName);
+    free(wpwd);
+    free(wuser);
 }
 
 /* Build an SMB URI
  * smb://[[[domain;]user[:password@]]server[/share[/path[/file]]]] */
 static int smb_get_uri( stream_t *p_access, char **ppsz_uri,
-                        const char *psz_domain,
                         const char *psz_user, const char *psz_pwd,
                         const char *psz_server, const char *psz_share_path,
                         const char *psz_name )
@@ -101,7 +110,7 @@ static int smb_get_uri( stream_t *p_access, char **ppsz_uri,
 #define PSZ_NAME_OR_NULL psz_name ? "/" : "", psz_name ? psz_name : ""
     if( psz_user )
         Win32AddConnection( p_access, psz_server, psz_share_path,
-                            psz_user, psz_pwd, psz_domain );
+                            psz_user, psz_pwd );
     return asprintf( ppsz_uri, "//%s%s%s%s", psz_server, PSZ_SHARE_PATH_OR_NULL,
                      PSZ_NAME_OR_NULL );
 }
@@ -180,7 +189,7 @@ static int DirRead(stream_t *p_access, input_item_node_t *p_node)
                 }
 
                 char* psz_path;
-                if( smb_get_uri( p_access, &psz_path, NULL, NULL, NULL,
+                if( smb_get_uri( p_access, &psz_path, NULL, NULL,
                                  p_sys->url.psz_host, p_sys->url.psz_path,
                                  psz_name ) < 0 )
                 {
@@ -291,7 +300,7 @@ static int Open(vlc_object_t *obj)
     {
         struct stat st;
 
-        if (smb_get_uri(access, &psz_uri, credential.psz_realm,
+        if (smb_get_uri(access, &psz_uri,
                         credential.psz_username, credential.psz_password,
                         url.psz_host, psz_decoded_path, NULL ) == -1 )
         {
@@ -344,6 +353,7 @@ static int Open(vlc_object_t *obj)
         sys->url = url;
         access->pf_readdir = DirRead;
         access->pf_control = access_vaDirectoryControlHelper;
+        fd = -1;
     }
     else
     {

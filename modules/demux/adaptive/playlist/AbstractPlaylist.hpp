@@ -41,8 +41,10 @@ namespace adaptive
                 virtual ~AbstractPlaylist();
 
                 virtual bool                    isLive() const = 0;
+                virtual bool                    isLowLatency() const;
                 void                            setType(const std::string &);
                 void                            setMinBuffering( vlc_tick_t );
+                void                            setMaxBuffering( vlc_tick_t );
                 vlc_tick_t                      getMinBuffering() const;
                 vlc_tick_t                      getMaxBuffering() const;
                 virtual void                    debug() = 0;
@@ -50,6 +52,10 @@ namespace adaptive
                 void    addPeriod               (BasePeriod *period);
                 void    addBaseUrl              (const std::string &);
                 void    setPlaylistUrl          (const std::string &);
+                void    setAvailabilityTimeOffset(vlc_tick_t);
+                void    setAvailabilityTimeComplete(bool);
+                vlc_tick_t getAvailabilityTimeOffset() const;
+                bool    getAvailabilityTimeComplete() const;
 
                 virtual Url         getUrlSegment() const; /* impl */
                 vlc_object_t *      getVLCObject()  const;
@@ -58,13 +64,13 @@ namespace adaptive
                 virtual BasePeriod*                      getFirstPeriod();
                 virtual BasePeriod*                      getNextPeriod(BasePeriod *period);
 
-                void                mergeWith(AbstractPlaylist *, vlc_tick_t = 0);
-                void                pruneByPlaybackTime(vlc_tick_t);
+                bool                needsUpdates() const;
+                void                updateWith(AbstractPlaylist *);
 
                 Property<vlc_tick_t>                   duration;
                 Property<time_t>                    playbackStart;
-                Property<time_t>                    availabilityEndTime;
-                Property<time_t>                    availabilityStartTime;
+                Property<vlc_tick_t>                   availabilityEndTime;
+                Property<vlc_tick_t>                   availabilityStartTime;
                 Property<vlc_tick_t>                   minUpdatePeriod;
                 Property<vlc_tick_t>                   maxSegmentDuration;
                 Property<vlc_tick_t>                   timeShiftBufferDepth;
@@ -77,6 +83,12 @@ namespace adaptive
                 std::string                         playlistUrl;
                 std::string                         type;
                 vlc_tick_t                          minBufferTime;
+                vlc_tick_t                          maxBufferTime;
+                bool                                b_needsUpdates;
+
+             private:
+                Undef<bool>                         availabilityTimeComplete;
+                Undef<vlc_tick_t>                   availabilityTimeOffset;
         };
     }
 }

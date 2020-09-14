@@ -2,7 +2,6 @@
  * dmo.h : DirectMedia Object codec module for vlc
  *****************************************************************************
  * Copyright (C) 2002, 2003 VLC authors and VideoLAN
- * $Id$
  *
  * Author: Gildas Bazin <gbazin@videolan.org>
  *
@@ -21,21 +20,21 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  *****************************************************************************/
 
-const GUID IID_IUnknown;
-const GUID IID_IClassFactory;
-const GUID IID_IWMCodecPrivateData;
-const GUID IID_IMediaObject;
-const GUID IID_IMediaBuffer;
-const GUID MEDIATYPE_Video;
-const GUID MEDIATYPE_Audio;
-const GUID MEDIASUBTYPE_PCM;
-const GUID FORMAT_VideoInfo;
-const GUID FORMAT_WaveFormatEx;
-const GUID GUID_NULL;
-const GUID MEDIASUBTYPE_I420;
-const GUID MEDIASUBTYPE_YV12;
-const GUID MEDIASUBTYPE_RGB24;
-const GUID MEDIASUBTYPE_RGB565;
+extern const GUID IID_IUnknown;
+extern const GUID IID_IClassFactory;
+extern const GUID IID_IWMCodecPrivateData;
+extern const GUID IID_IMediaObject;
+extern const GUID IID_IMediaBuffer;
+extern const GUID MEDIATYPE_Video;
+extern const GUID MEDIATYPE_Audio;
+extern const GUID MEDIASUBTYPE_PCM;
+extern const GUID FORMAT_VideoInfo;
+extern const GUID FORMAT_WaveFormatEx;
+extern const GUID GUID_NULL;
+extern const GUID MEDIASUBTYPE_I420;
+extern const GUID MEDIASUBTYPE_YV12;
+extern const GUID MEDIASUBTYPE_RGB24;
+extern const GUID MEDIASUBTYPE_RGB565;
 
 
 #ifndef _WIN32

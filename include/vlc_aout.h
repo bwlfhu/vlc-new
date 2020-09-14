@@ -24,6 +24,7 @@
 #define VLC_AOUT_H 1
 
 #include <assert.h>
+#include <vlc_list.h>
 
 /**
  * \defgroup audio_output Audio output
@@ -84,6 +85,7 @@
 
 #define AOUT_FMT_HDMI( p_format )                   \
     ( (p_format)->i_format == VLC_CODEC_EAC3        \
+    ||(p_format)->i_format == VLC_CODEC_DTSHD       \
     ||(p_format)->i_format == VLC_CODEC_TRUEHD      \
     ||(p_format)->i_format == VLC_CODEC_MLP         \
     )
@@ -112,6 +114,7 @@
 #include <vlc_block.h>
 
 struct vlc_audio_output_events {
+    void (*timing_report)(audio_output_t *, vlc_tick_t system_now, vlc_tick_t pts);
     void (*volume_report)(audio_output_t *, float);
     void (*mute_report)(audio_output_t *, bool);
     void (*policy_report)(audio_output_t *, bool);
@@ -136,7 +139,7 @@ struct vlc_audio_output_events {
  **/
 struct audio_output
 {
-    struct vlc_common_members obj;
+    struct vlc_object_t obj;
 
     void *sys; /**< Private data for callbacks */
 
@@ -158,7 +161,7 @@ struct audio_output
       */
 
     void (*stop)(audio_output_t *);
-    /**< Stops the existing stream (optional, may be NULL).
+    /**< Stops the existing stream (mandatory, cannot be NULL).
       *
       * This callback terminates the current audio stream,
       * and returns the audio output to stopped state.
@@ -176,7 +179,14 @@ struct audio_output
       *
       * If the audio output clock is exactly synchronized with the system
       * monotonic clock (i.e. vlc_tick_now()), then aout_TimeGetDefault() can
-      * implement this callback.
+      * implement this callback. In that case, drain must be implemented (since
+      * the default implementation uses the delay to wait for the end of the
+      * stream).
+      *
+      * This callback is called before the first play() in order to get the
+      * initial delay (the hw latency). Most modules won't be able to know this
+      * latency before the first play. In that case, they should return -1 and
+      * handle the first play() date, cf. play() documentation.
       *
       * \param delay pointer to the delay until the next sample to be written
       *              to the playback buffer is rendered [OUT]
@@ -187,6 +197,12 @@ struct audio_output
 
     void (*play)(audio_output_t *, block_t *block, vlc_tick_t date);
     /**< Queues a block of samples for playback (mandatory, cannot be NULL).
+      *
+      * The first play() date (after a flush()/start()) will be most likely in
+      * the future. Modules that don't know the hw latency before a first play
+      * (when they return -1 from the first time_get()) will need to handle
+      * this. They can play a silence buffer with 'length = date - now()', or
+      * configure their render callback to start at the given date.
       *
       * \param block block of audio samples
       * \param date intended system time to render the first sample
@@ -211,13 +227,19 @@ struct audio_output
       * \note This callback cannot be called in stopped state.
       */
 
-    void (*flush)( audio_output_t *, bool wait);
-    /**< Flushes or drains the playback buffers (mandatory, cannot be NULL).
+    void (*flush)( audio_output_t *);
+    /**< Flushes the playback buffers (mandatory, cannot be NULL).
       *
       * \param wait true to wait for playback of pending buffers (drain),
       *             false to discard pending buffers (flush)
       *
       * \note This callback cannot be called in stopped state.
+      */
+    void (*drain)(audio_output_t *);
+    /**< Drain the playback buffers (can be NULL).
+      *
+      * If NULL, the caller will wait for the delay returned by time_get before
+      * calling stop().
       */
 
     int (*volume_set)(audio_output_t *, float volume);
@@ -454,12 +476,22 @@ static inline int aout_TimeGetDefault(audio_output_t *aout,
 static inline void aout_PauseDefault(audio_output_t *aout, bool paused,
                                      vlc_tick_t date)
 {
-    if (paused && aout->flush != NULL)
-        aout->flush(aout, false);
+    if (paused)
+        aout->flush(aout);
     (void) date;
 }
 
 /* Audio output filters */
+
+/**
+ * Enable or disable an audio filter ("audio-filter")
+ *
+ * \param aout a valid audio output
+ * \param name a valid filter name
+ * \param add true to add the filter, false to remove it
+ * \return 0 on success, non-zero on failure.
+ */
+VLC_API int aout_EnableFilter(audio_output_t *aout, const char *name, bool add);
 
 typedef struct
 {
@@ -481,15 +513,13 @@ typedef struct
     };
 
 typedef struct aout_filters aout_filters_t;
-typedef struct aout_request_vout aout_request_vout_t;
 
 VLC_API aout_filters_t *aout_FiltersNew(vlc_object_t *,
                                         const audio_sample_format_t *,
                                         const audio_sample_format_t *,
-                                        const aout_request_vout_t *,
                                         const aout_filters_cfg_t *cfg) VLC_USED;
-#define aout_FiltersNew(o,inf,outf,rv,remap) \
-        aout_FiltersNew(VLC_OBJECT(o),inf,outf,rv,remap)
+#define aout_FiltersNew(o,inf,outf,remap) \
+        aout_FiltersNew(VLC_OBJECT(o),inf,outf,remap)
 VLC_API void aout_FiltersDelete(vlc_object_t *, aout_filters_t *);
 #define aout_FiltersDelete(o,f) \
         aout_FiltersDelete(VLC_OBJECT(o),f)
@@ -499,7 +529,171 @@ VLC_API block_t *aout_FiltersDrain(aout_filters_t *);
 VLC_API void     aout_FiltersFlush(aout_filters_t *);
 VLC_API void     aout_FiltersChangeViewpoint(aout_filters_t *, const vlc_viewpoint_t *vp);
 
-VLC_API vout_thread_t * aout_filter_RequestVout( filter_t *, vout_thread_t *p_vout, const video_format_t *p_fmt );
+VLC_API vout_thread_t *aout_filter_GetVout(filter_t *, const video_format_t *);
+
+static inline int aout_TimeGet(audio_output_t *aout, vlc_tick_t *delay)
+{
+    return aout->time_get(aout, delay);
+}
+
+/** @} */
+
+/**
+ * @defgroup audio_output__meter Audio meter API
+ */
+
+/**
+ * Audio loudness measurement
+ */
+struct vlc_audio_loudness
+{
+    /** Momentary loudness (last 400 ms), in LUFS */
+    double loudness_momentary;
+    /** Short term loudness (last 3seconds), in LUFS */
+    double loudness_shortterm;
+    /** Integrated loudness (global), in LUFS */
+    double loudness_integrated;
+    /** Loudness range, in LU */
+    double loudness_range;
+    /** True Peak, in dBTP */
+    double truepeak;
+};
+
+/**
+ * Audio meter callback
+ *
+ * Triggered from vlc_audio_meter_Process() and vlc_audio_meter_Flush().
+ */
+struct vlc_audio_meter_cbs
+{
+    /**
+     * Called when new loudness measurements are available
+     *
+     * @param date absolute date (likely in the future) of this measurement
+     * @param loudness pointer to the loudness measurement
+     * @param opaque pointer set by vlc_audio_meter_AddPlugin().
+     */
+    void (*on_loudness)(vlc_tick_t date, const struct vlc_audio_loudness *loudness, void *data);
+};
+
+/**
+ * Audio meter plugin opaque structure
+ *
+ * This opaque structure is returned by vlc_audio_meter_AddPlugin().
+ */
+typedef struct vlc_audio_meter_plugin vlc_audio_meter_plugin;
+
+/**
+ * Audio meter plugin owner structure
+ *
+ * Used to setup callbacks and private data
+ *
+ * Can be registered with vlc_audio_meter_AddPlugin().
+ */
+struct vlc_audio_meter_plugin_owner
+{
+    const struct vlc_audio_meter_cbs *cbs;
+    void *sys;
+};
+
+/**
+ * Audio meter structure
+ *
+ * Initialise with vlc_audio_meter_Init()
+ *
+ * @warning variables of this struct should not be used directly
+ */
+struct vlc_audio_meter
+{
+    vlc_mutex_t lock;
+    vlc_object_t *parent;
+    const audio_sample_format_t *fmt;
+
+    struct vlc_list plugins;
+};
+
+/**
+ * Initialize the audio meter structure
+ *
+ * @param meter allocated audio meter structure
+ * @param parent object that will be used to create audio filters
+ */
+VLC_API void
+vlc_audio_meter_Init(struct vlc_audio_meter *meter, vlc_object_t *parent);
+#define vlc_audio_meter_Init(a,b) vlc_audio_meter_Init(a, VLC_OBJECT(b))
+
+/**
+ * Free allocated resource from the audio meter structure
+ *
+ * @param meter allocated audio meter structure
+ */
+VLC_API void
+vlc_audio_meter_Destroy(struct vlc_audio_meter *meter);
+
+/**
+ * Set or reset the audio format
+ *
+ * This will reload all plugins added with vlc_audio_meter_AddPlugin()
+ *
+ * @param meter audio meter structure
+ * @param fmt NULL to unload all plugins or a valid pointer to an audio format,
+ * must stay valid during the lifetime of the audio meter (until
+ * vlc_audio_meter_Reset() or vlc_audio_meter_Destroy() are called)
+ *
+ * @return VLC_SUCCESS on success, VLC_EGENERIC if a plugin failed to load
+ */
+VLC_API int
+vlc_audio_meter_Reset(struct vlc_audio_meter *meter, const audio_sample_format_t *fmt);
+
+/**
+ * Add an "audio meter" plugin
+ *
+ * The module to be loaded if meter->fmt is valid, otherwise, the module
+ * will be loaded from a next call to vlc_audio_meter_Reset()
+ *
+ * @param meter audio meter structure
+ * @param chain name of the module, can contain specific module options using
+ * the following chain convention:"name{option1=a,option2=b}"
+ * @param cbs pointer to a vlc_audio_meter_events structure, the
+ * structure must stay valid during the lifetime of the plugin
+ * @param cbs_data opaque pointer used by the callbacks
+ * @return a valid audio meter plugin, or NULL in case of error
+ */
+VLC_API vlc_audio_meter_plugin *
+vlc_audio_meter_AddPlugin(struct vlc_audio_meter *meter, const char *chain,
+                          const struct vlc_audio_meter_plugin_owner *owner);
+
+/**
+ * Remove an "audio meter" plugin
+ *
+ * @param meter audio meter structure
+ * @param plugin plugin returned by vlc_audio_meter_AddPlugin()
+ */
+VLC_API void
+vlc_audio_meter_RemovePlugin(struct vlc_audio_meter *meter, vlc_audio_meter_plugin *plugin);
+
+/**
+ * Process an audio block
+ *
+ * vlc_audio_meter_events callbacks can be triggered from this function.
+ *
+ * @param meter audio meter structure
+ * @param block pointer to a block, this block won't be released of modified
+ * from this function
+ * @param date absolute date (likely in the future) when this block should be rendered
+ */
+VLC_API void
+vlc_audio_meter_Process(struct vlc_audio_meter *meter, block_t *block, vlc_tick_t date);
+
+/**
+ * Flush all "audio meter" plugins
+ *
+ * vlc_audio_meter_events callbacks can be triggered from this function.
+ *
+ * @param meter audio meter structure
+ */
+VLC_API void
+vlc_audio_meter_Flush(struct vlc_audio_meter *meter);
 
 /** @} */
 

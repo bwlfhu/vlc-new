@@ -11,9 +11,6 @@ info()
 SCRIPTDIR=$(dirname "$0")
 source "$SCRIPTDIR/env.build.sh" "none"
 
-
-ARCH="x86_64"
-MINIMAL_OSX_VERSION="10.10"
 SDKROOT=$(xcrun --show-sdk-path)
 VLCBUILDDIR=""
 
@@ -40,6 +37,7 @@ OPTIONS:
    -a <arch>     Use the specified arch (default: $ARCH)
    -C            Use the specified VLC build dir
    -b <url>      Enable breakpad support and send crash reports to this URL
+   -d            Disable debug mode (on by default)
 EOF
 
 }
@@ -54,7 +52,7 @@ spopd()
     popd > /dev/null
 }
 
-while getopts "hvrcpi:k:a:j:C:b:" OPTION
+while getopts "qhvrcdpi:k:a:j:C:b:" OPTION
 do
      case $OPTION in
          h)
@@ -64,6 +62,9 @@ do
          q)
              set +x
              QUIET="yes"
+         ;;
+         d)
+             NODEBUG="yes"
          ;;
          r)
              REBUILD="yes"
@@ -121,6 +122,12 @@ export SDKROOT
 vlcSetBaseEnvironment
 vlcroot="$(vlcGetRootDir)"
 
+# Checking prerequisites
+info "Checking for python3 ..."
+python3 --version || { echo "python3 not found. Please install from python.org, or set" \
+	"VLC_PATH environment variable to include python3." \
+	; exit 1; }
+
 
 builddir="$(pwd)"
 info "Building in \"$builddir\""
@@ -148,15 +155,19 @@ vlcSetContribEnvironment "$MINIMAL_OSX_VERSION"
 
 info "Building contribs"
 spushd "${vlcroot}/contrib"
+
+if [ "$REBUILD" = "yes" ]; then
+    rm -rf contrib-$TRIPLET
+    rm -rf $TRIPLET
+fi
 mkdir -p contrib-$TRIPLET && cd contrib-$TRIPLET
 ../bootstrap --build=$TRIPLET --host=$TRIPLET > $out
-if [ "$REBUILD" = "yes" ]; then
-    make clean
-fi
+
 if [ "$CONTRIBFROMSOURCE" = "yes" ]; then
+    make list
     make fetch
     make -j$JOBS .gettext
-    make -j$JOBS
+    make -j$JOBS -k || make -j1
 
     if [ "$PACKAGE" = "yes" ]; then
         make package
@@ -196,6 +207,9 @@ CONFIGFLAGS=""
 if [ ! -z "$BREAKPAD" ]; then
      CONFIGFLAGS="$CONFIGFLAGS --with-breakpad=$BREAKPAD"
 fi
+if [ "$NODEBUG" = "yes" ]; then
+     CONFIGFLAGS="$CONFIGFLAGS --disable-debug"
+fi
 
 if [ "${vlcroot}/configure" -nt Makefile ]; then
 
@@ -207,7 +221,6 @@ if [ "${vlcroot}/configure" -nt Makefile ]; then
       $CONFIGFLAGS \
       $VLC_CONFIGURE_ARGS > $out
 fi
-
 
 #
 # make
@@ -246,10 +259,15 @@ if [ "$PACKAGETYPE" = "u" ]; then
 
     info "Building VLC release archive"
     make package-macosx-release
+    make package-macosx-sdk
+
     shasum -a 512 vlc-*-release.zip
+    shasum -a 512 vlc-macos-sdk-*.tar.gz
+
 elif [ "$PACKAGETYPE" = "n" -o "$PACKAGE" = "yes" ]; then
     info "Building VLC dmg package"
     make package-macosx
+    make package-macosx-sdk
 fi
 
 if [ ! -z "$VLCBUILDDIR" ]; then
